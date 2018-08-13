@@ -1,0 +1,49 @@
+---
+title: "Downlod 1 or more stock prices"
+author: "Nicholas Toscano"
+date: "January 25, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Here is the code how to download stock price of multiple assets from 
+#yahoo finance
+#install.packages("quantmod")
+
+library(quantmod)
+library(ggplot2)
+library("zoo")
+library("xts")
+
+#Set working directorya
+setwd('C:/Users/Nick/Desktop/R_Ticker_Call')
+getwd()
+```
+
+```{r}
+start <- as.Date("2016-01-01")
+end <- Sys.Date()
+tickers <- c("NTDOY","NTDOF","", "")
+asset.price <- NULL
+#download stock prices of four stocks through for loop
+for(ticker in tickers)
+  asset.price <- cbind(asset.price,getSymbols(ticker, from = start, to = end,auto.assign = F))
+head(asset.price) 
+```
+
+```{r}
+adjcls.price <- asset.price[,c(6,12,18,24)]#this will select only the adjusted closing price
+plot(adjcls.price)
+
+title(main="Closing Prices", col.main="Black", font.main="4",
+      xlab="Date", ylab="Price",  col.lab="Black", cex.lab=0.90, font.lab="2")
+```
+
+```{r}
+write.zoo(asset.price, "Correlate_tickers.csv",index.name="Date",sep=",")
+```
+
