@@ -20,7 +20,7 @@ library("zoo")
 library("xts")
 
 #Set working directorya
-setwd('C:/Users/Nick/Desktop/R_Ticker_Call')
+setwd('your_directory')
 getwd()
 ```
 
