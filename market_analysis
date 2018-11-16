@@ -1,0 +1,53 @@
+---
+title: "Market Analysis"
+author: "Nicholas Toscano"
+date: "11/12/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Here is the code how to download stock price of multiple assets from 
+#yahoo finance
+#install.packages("quantmod")
+library(quantmod)
+library(ggplot2)
+library("zoo")
+library("xts")
+#Set working directory
+setwd('/Users/nick/Documents/Programming/R')
+getwd()
+```
+
+```{r}
+# Read data from csv file provided and omit any NA records using na.omit 
+exrates <- na.omit(read.csv("exrates.csv", header = TRUE))
+
+# Review data using head(), tail(), and str()
+head(exrates)
+tail(exrates)
+str(exrates)
+```
+
+```{r}
+#start <- as.Date("2018-01-01")
+start <- Sys.Date()-90
+end <- Sys.Date()
+tickers <- c("^VIX","^GSPC","^IXIC","^DJI", "GLD")
+asset.price <- NULL
+#download stock prices of four stocks through for loop
+for(ticker in tickers)
+  asset.price <- cbind(asset.price,getSymbols(ticker, from = start, to = end,auto.assign = F))
+head(asset.price) 
+```
+
+```{r}
+plot(asset.price[,"VIX.Adjusted"], main = "VIX")
+plot(asset.price[,"GSPC.Adjusted"], main = "S&P 500")
+plot(asset.price[,"IXIC.Adjusted"], main = "NASDAQ")
+plot(asset.price[,"DJI.Adjusted"], main = "Dow Jones")
+plot(asset.price[,"GLD.Adjusted"], main = "GOLD")
+```
