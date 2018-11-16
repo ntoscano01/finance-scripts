@@ -1,0 +1,882 @@
+---
+author(s): "Nicholas Toscano"
+date: "February 11, 2018"
+geometry: "left=3cm,right=3cm,top=2cm,bottom=2cm"
+header-includes:
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \fancyhead[CO,CE]{\thetitle}
+- \fancyfoot[CO,CE]{Prepared by Karen Altman, Neil Dewar, Jason Shaull and Nicholas Toscano}
+- \fancyhead[RE,RO]{\thepage}
+- \renewcommand{\footrulewidth}{0.5pt}
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+knitr::opts_chunk$set(tidy = TRUE)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=36))
+knitr::opts_chunk$set(size = "small")
+knitr::opts_hooks$set(fig.width = function(options) {
+  if (options$fig.width < options$fig.height) {
+    options$fig.width = options$fig.height
+  }
+  options
+})
+knitr::knit_hooks$set(mysize = function(before, options, envir) {
+  if (before) 
+    return(options$size)
+})
+```
+
+## Purpose, Process, Product
+
+Various `R` features and finance topics will be reprised in this chapter. Specifically we will practice reading in data, exploring time series, estimating auto and cross correlations, and investigating volatility clustering in financial time series. We will summarize our experiences in debrief.
+
+## Assignment
+
+This assignment will span Live Sessions 3 and 4 (two weeks). The project (3) is due before Live Session 5. Submit into **Coursework > Assignments and Grading > Project 3 > Submission** an `RMD`  file with filename **lastname-firstname_Project3.Rmd**. If you have difficulties submitting a `.Rmd` file, then submit a `.txt` file. 
+
+1. Use headers (##), r-chunks for code, and text to build a report that addresses the two parts of this project.
+2. List in the text the 'R' skills needed to complete this project.
+3. Explain each of the functions (e.g., `ggplot()`) used to compute and visualize results.
+4. Discuss how well did the results begin to answer the business questions posed at the beginning of each part of the project.
+
+## Initial Configuration and Data Exploration 
+
+In this section we will establish the required packages for the project and also read in the data set provided. Once the data has been pulled in, the first step of any analytics project is to review the data for suitablility. First, we look at the first and last rows using the head and tail functions, and then the str and summary functions to understand the data. We explore the distributions of each variable to identify if the data is reasonable, or contains any outlier data points that require further investigation.   
+
+```{r, echo=FALSE, eval=TRUE, include=FALSE}
+
+# Check for required packages and load them if needed.
+# specify the packages of interest
+
+packages = c("ggplot2","zoo","xts", "lubridate", "reshape2","matrixStats", "quantreg","knitr")
+
+#use this function to check if each package is on the local machine 
+#if a package is installed, it will be loaded
+#if any are not, the missing package(s) will be installed and loaded
+
+package.check <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    install.packages(x, dependencies = TRUE)
+    library(x, character.only = TRUE)
+  }
+})
+
+#verify they are loaded
+search()
+
+#Set working directory
+setwd("filepath")
+
+#use getwd() to print your working directoy and visually ensure R is reading the correct directory path.
+getwd()
+
+#Use list.files to ensure the data is in the directory
+list.files()
+
+# Read in libraries
+require(zoo)
+require(xts)
+require(ggplot2)
+require(lubridate)
+require(reshape2)
+require(matrixStats)
+require(quantreg)
+require(knitr)
+
+# Read data from csv file provided and omit any NA records using na.omit 
+exrates <- na.omit(read.csv("exrates.csv", header = TRUE))
+
+# Review data using head(), tail(), and str()
+head(exrates)
+tail(exrates)
+str(exrates)
+
+# Review exchange rate variables to identify any anomalies.
+summary(exrates)
+
+round(100.0 * (max(exrates$USD.EUR) - min(exrates$USD.EUR))/min(exrates$USD.EUR),2)
+round(100.0 * (max(exrates$USD.GBP) - min(exrates$USD.GBP))/min(exrates$USD.GBP),2)
+round(100.0 * (max(exrates$USD.CNY) - min(exrates$USD.CNY))/min(exrates$USD.CNY),2)
+round(100.0 * (max(exrates$USD.JPY) - min(exrates$USD.JPY))/min(exrates$USD.JPY),2)
+
+# Transform Date variable and review for any anomalies
+
+exrates$DATE <- as.Date(exrates$DATE, "%m/%d/%Y") # specify the date format in the text dates
+str(exrates$DATE) # display the structure of the resulting date column
+
+summary(factor(wday(exrates$DATE)))
+
+```
+We noted that the data is presented as a column of dates represented as characters, and four columns of doubles, each representing a daily exchange rate between a currency pair. By checking internet exchange rates, we note that each column is presented as being the value of one unit of EU Euro (EUR), GB Pound (GBP), Chinese Yuan (CNY), and Japanese Yen (JPY) represented in US Dollars (USD). If the USD/EUR rate increases, one Euro is worth more dollars, if it decreases a Euro is worth less dollars.  
+
+For the dates listed, we noted that the character representation was not in a standard format leading with the year, but instead, was the format "%m/%d/%Y". To allow for analysis, we transformed the DATE column into a data format using the as.Date() function. For the date range, we found `r min(exrates$DATE)` to `r max(exrates$DATE)`, a `r max(exrates$DATE) - min(exrates$DATE)` range. Since we noted that there were `r nrow(exrates)` observations, there are considerably more elapsed days than there are observations. We can hypothesize here that these are observations of exchange rates less-frequently than daily. In exploring the frequency of observations further using the summary and wday functions, we observed that there are no records for days 1 and 7 (i.e. Sunday and Saturday) and that the observations are distributed similarly across weekdays, with slightly fewer records on Monday. We conclude that these are daily records, with no records occurring on public holidays. Furthermore, we also noted that for the dates provided, the first month, January 2013, only has four records in it. This will also need be considered in Part 2 where we summarize the data by month. 
+
+For the exchange rate columns, we found that each had values within reasonably tight bounds. 
+
+* EUR - the variation between min and max values is `r round(100.0 * (max(exrates$USD.EUR) - min(exrates$USD.EUR))/min(exrates$USD.EUR),2)`
+* GBP - the variation between min and max values is `r round(100.0 * (max(exrates$USD.GBP) - min(exrates$USD.GBP))/min(exrates$USD.GBP),2)`
+* CNY - the variation between min and max values is `r round(100.0 * (max(exrates$USD.CNY) - min(exrates$USD.CNY))/min(exrates$USD.CNY),2)`
+* JPY - the variation between min and max values is `r round(100.0 * (max(exrates$USD.JPY) - min(exrates$USD.JPY))/min(exrates$USD.JPY),2)`
+
+A smaller variation in CNY was found and is to be expected, as the Chinese government controls Remnimbi to remain aligned with the US Dollar.
+
+## Part 1
+
+In this set we will build and explore the data set using filters and `if` and `diff` statements. We will then answer some questions using plots and a pivot table report. We will then review a function to house our approach in case we would like to run some of the same analysis on other data sets.
+
+### Problem
+
+Marketing and accounts receivables managers at our company continue to note we have a significant exposure to exchange rates. Our customer base is located in the United Kingdom, across the European Union, and in Japan. The exposure hits the gross revenue line of our financials. Cash flow is further affected by the ebb and flow of accounts receivable components of working capital. of producing several products. When exchange rates are volatile, so is earnings, and more importantly, our cash flow. Our company has also missed earnings forecasts for five straight quarters. To get a handle on exchange rate exposures we download this data set and review some basic aspects of the exchange rates. 
+
+### Question 1 
+
+What is the nature of exchange rates? We want to reflect the ups and downs of rate movements, known to managers as currency appreciation and depreciation. First, we calculate percentage changes as log returns. Our interest is in the ups and downs. To look at that we use `if` and `else` statements to define a new column called `direction`. We will build a data frame to house this analysis.
+
+#### 1.1.1 Create Data Frame of Returns
+
+Satisfied with our understanding of the data, and its distribution and quality, we proceeded with creating a data frame of exchange rate returns using the difference of logs return calculation. 
+
+Within this calculation, we used the as.matrix function to create a matrix of the exchange rates and less its first row to remove the dates. Once the data frame has been created, we review the data to ensure suitability using the head and str commands.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+  
+# Compute log differences percent using as.matrix to force numeric type
+# Check data/format by using head(),tail()and str()
+
+exrates.r <- diff(log(as.matrix(exrates[, -1]))) * 100
+head(exrates.r,3)
+
+str(exrates.r)
+```
+#### 1.1.2 Create Additional Data Sets for Size of Return and Direction of Change - Combine All into a Data Frame
+
+Once the returns have been calculated, we then created the additional data sets containing the size of the return and the direction of the return for each currency pair and created column names as  "size" and "direction". For size, we used na.omit to omit any NA values, and the abs function to calculate. For direction, we used the ifelse statements to determine. 
+
+We then displayed the first few rows of the new data sets once again to confirm accuracy and suitability.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Create volatility indicators with size (absolute) and direction (up/down)
+# Create column names using colnames()
+# Check data and format using head()
+  
+size <- na.omit(abs(exrates.r))
+direction <- ifelse(exrates.r > 0, 1, ifelse(exrates.r < 0, -1, 0))
+
+colnames(size) <- paste(colnames(size),".size", sep = "")
+colnames(direction) <- paste(colnames(direction),".dir", sep = "")
+
+head(size,3)
+head(direction,3)
+
+```
+
+With the exchange rate return, size and direction variables calculated, we then combined them into one data frame with the date provided for each. To do so, we first take the transformed the DATE variable and remove the first record. This is because the return variables trail one record from the original data set for calculation purposes.  
+
+We then bind the returns, size and direction variables into values and convert all into a data frame. We use the str and head functions to once again review the data for format and suitability before proceeding.  
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Split data into dates and rates
+
+dates <- (exrates$DATE[-1])
+values <- cbind(exrates.r, size, direction)
+
+# Convert into a data frame
+
+exrates.df <- data.frame(dates = dates, returns = exrates.r, size = size, direction = direction)
+
+# Check data and format 
+
+head(exrates.df,3)
+str(exrates.df) 
+
+```
+#### 1.1.3 Convert Data Frame into XTS Time Series Object
+
+For us to view the data frame as a times series object, we then converetd the data frame using xts. The R Language contains three options for managing time series - ts, zoo and xts - in increasing order of sophistication. We chose to use xts since it has all the properties of ts and zoo but supersedes them with advanced features. We note that zoo was employed in the original text; however, as zoo is a subset of xts and not required to perform this analysis, we chose xts.
+
+Before converting the data frame, we first verified the frame was complete using the complete.cases function. Once verified, we then created the time series object using xts. Before proceeding, we used the str and head functions to review the data for proper format and suitability.  
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+# Check for missing data
+
+exrates.df[!complete.cases(exrates.df),] # 0 rows returned, safe to proceed
+
+# Create an xts object with row names equal to the dates
+
+exrates.xts <- xts(exrates.df[,-1], # all rows, all columns except dates
+               order.by = exrates.df$dates) # assign dates column as index
+
+# Check data and format using str() and head()
+
+str(exrates.xts)
+head(exrates.xts,3)
+
+```
+#### 1.1.4 Review Results in Plot Format
+
+To investigate the exchange rate risk, we then plotted graphs to understand the variability of the exchange rates through a series of time. To break the data into charts, we used multiple approaches. First, we used the reshape2 package's melt function to prepare the data and then used ggplot to 'facet' the data into separate plots for each of the time series for the returns. For size, we used another approach under zoo, with the autoplot.zoo function.  
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Reshape the time series data by unpivoting so that the column names are a field
+
+tmp <- melt(data = exrates.df, 
+            id = "dates", # date column 
+            measure.vars = c(2:5)) # and the four returns columns
+
+# Re-order the levels of the factor
+
+x <- tmp$variable
+x.refactor <- factor(x, levels = levels(x)[c(3,1,2,4)]) # CNY, EUR, GBP, JPY
+tmp$variable <- x.refactor
+
+# Create plots
+
+ggplot(data = tmp, aes(x=dates, y=value, colour=variable)) +
+  theme_light() +
+  geom_line() + 
+  facet_wrap(~variable, ncol=1)
+
+title.chg <- "Exchange Rate Percent Changes (Absolute)"
+autoplot.zoo(exrates.xts[,5:8]) + ggtitle(title.chg) + ylim(-5, 5)
+
+```
+
+In this analysis, we found there is a continual volatility in the returns for each of the time series except CNY. There is only one obvious period of returns on CNY, in Q3 2015. The less-controlled currencies show continual volatility and also show clustering of volatility (i.e. the biggest returns (positive and negative) occur in clusters). The plots also show that the clustering of volatility occurs at different times for the different currencies. 
+
+For example, JPY shows a volatility cluster in Q2/2013 while others do not, EUR shows a cluster in Q1/2015 while others do not, and GBP shows a cluster in late Q2/2016 while others do not. We can conclude from this that the volatility in these currency returns may be driven by the local economies associated with the currencies. If the volatilities were driven by the USA or world events, the volatility would occur all at the same time in the different plots.  
+
+In researching the internet, local economic events associated with these time periods were found to support these volalitity clusters:  
+
+* China Q3/2015: China intentionally devalued its otherwise locked-down currency: <https://www.theguardian.com/business/2015/aug/12/china-yuan-slips-again-after-devaluation>  
+* United Kingdom Q2/2016: The British people voted in a referendum in June 2016 to leave the EU (BREXIT): <http://www.bbc.com/news/politics/eu_referendum/results>  
+* European Union Q1/2015: A spike caused by Exchange Rate traders making speculative short trades, in part due to concerns about Greek economic stability: <https://www.fxcm.com/insights/what-causes-volatility-in-the-euro/>  
+* Japan Q2/2013: The Japanese government hiked its sales tax rate in April 2013, causing the economy to move into recession:  <https://www.reuters.com/article/us-japan-economy-gdp/japan-economy-shrinks-more-than-expected-backs-abes-tax-decision-idUSKBN0JL0ZH20141208>  
+
+
+### Question 2
+
+Let's dig deeper and compute mean, standard deviation, etc. Load the `data_moments()` function. Run the function using the `exrates` data and write a `knitr::kable()` report.
+
+#### 1.2.1 Use Data Moments to Calculate Data Statistics
+
+To review the statistical properties of the distribution of the data for the returns and size of the returns, we build a data moments function next that will provide the mean, median, standard deviation, inter-quartile range, skewness and kurtosis.
+
+We then run the data moments functions for the returns and size data sets.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Build data moments function to calculate mean, median, standard deviation, IQR, skewness and kurtosis
+
+data_moments <- function(data){
+  library(moments)
+  library(matrixStats)
+  mean.r <- colMeans(data)
+  median.r <- colMedians(data)
+  sd.r <- colSds(data)
+  IQR.r <- colIQRs(data)
+  skewness.r <- skewness(data)
+  kurtosis.r <- kurtosis(data)
+  result <- data.frame(mean = mean.r, median = median.r, std_dev = sd.r, IQR = IQR.r, skewness = skewness.r, kurtosis = kurtosis.r)
+  return(result)
+}
+
+# Run data moments for both the absolute returns and then the size
+
+answer <- data_moments(exrates.xts[, 1:4])
+answer2 <- data_moments(exrates.xts[, 5:8])
+
+```
+#### 1.2.2 Create Tables to Show Results
+
+Once we calculated the statistics for the returns and size, we used the kable function under the knitr package to show the results in a table format.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+knitr::kable(answer, caption = "Exchange Returns", digits = 3)
+knitr::kable(answer2, caption = "Absolute Value of Exchange Returns", digits = 3)
+
+```
+
+
+
+In reviewing the statiscal data, we found the skewness for the returns being negative for both JPY and GBP, and the kurtosis being high for both GBP and CNY. Meaning, the values found in the set are skewed to the left and indicating a heavy tail, or outliers.  
+
+With the size of the returns, the skewness is positive for all, meaning all are skewed right.  In kurtosis, we again found GBP having a largest indicating a heavy tail, or outliers.
+
+## Part 2
+
+We will use the data from Set A to investigate the interactions of the distribution of exchange rates.
+
+### Problem 
+
+We want to characterize the distribution of up and down movements visually. Also we would like to repeat the analysis periodically for inclusion in management reports.
+
+### Question 1
+
+How can we show the shape of our exposure to euros, especially given our tolerance for risk? Suppose corporate policy set tolerance at 95\%. Let's use the `exrates.df` data frame with `ggplot2` and the cumulative relative frequency function `stat_ecdf`.
+
+#### 2.1.1 The Shape of Exposure to Euros
+
+To identify and analyze the shape of the exposure to Euros, we first reviewed the distribution of the USD/EUR exchange rates with a histogram using ggplot.  
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+ggplot(data=exrates.xts, aes(returns.USD.EUR)) +
+  theme_light() +
+  labs(y = "Frequency", x = "USD/EUR Exchange Rate Return", title = "Histogram of Frequency of USD/EUR Exchange Rate Returns") +
+  scale_x_continuous(breaks = c(-2.5, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4)) +
+  geom_histogram(fill="thistle", col="cadetblue1", bins = 30) 
+```
+
+We noted here that the returns are approximately normally distributed, with some noise in the distribution. The distribution displays kurtosis, meaning its peak is higher than that of a true normal distribution. We also observed the presence of extreme tail events in both the left and right tails.
+
+#### 2.1.2 Plot the Returns with Tolerance Rates
+
+We then proceeded to present the USD/EUR exchange rate returns using the stat_ecdf plot in ggplot, which shows us the cumulative distribution of USD/EUR returns.  We chose to plot the absolute version of the returns, as the two-tailed distribution visible in the histogram would have caused a distorted cumulative distribution plot.
+
+We noted that the quantile function in R essentially performs the reverse of the ecdf function. Ecdf tells us what the quantile is for a given value associated with the value in the distribution, while the quantile function tells us what the value is for a given quantile in the distribution associated with that quantile. Since our corporate office is interested in the exchange rates with returns outside of 95% probability, we called the quantile(0.95) function and show the return associated with that cut-off.  We used this value to draw a vertical line on a plot to show the cut-off.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Use gglot to show cumulative distribution of size of USD/EUR exchange returns
+
+r <- quantile(exrates.df$size.USD.EUR.size, 0.95)
+
+ggplot(exrates.xts, aes(size.USD.EUR.size)) +
+  labs(y = "Probability", x = "Return", title = "Cumulative Distribution of USD/EUR Exchange Returns (Absolute)") +
+  scale_x_continuous(breaks = c(0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5)) +
+  theme_light() +
+  stat_ecdf(colour = "thistle", size=0.4) +
+  geom_hline(yintercept = 0.95, color="lightseagreen", linetype="dotdash") +
+  geom_vline(xintercept = r, color="lightseagreen", linetype="dotdash") 
+
+```
+
+From this plot, we can determine that 95% of all exchange rate returns for USD/EUR are less than 1.15%. From this, we can advise corporate leadership to hedge against EUR exchange rate returns in excess of this rate of return.
+
+Because the distribution is not perfectly symmetrical, another way to look at this would be to consider the two-tailed distribution of returns and consider the 2.5% of most extreme returns:
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+r <- quantile(exrates.df$returns.USD.EUR, c(0.025, 0.975))
+
+ggplot(exrates.xts, aes(returns.USD.EUR)) +
+  labs(y = "Probability", x = "Return", title = "Cumulative Distribution of USD/EUR Exchange Returns (Absolute)") +
+  scale_x_continuous(breaks = c(0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5)) +
+  theme_light() +
+  stat_ecdf(colour = "thistle", size=0.4) +
+  geom_hline(yintercept = 0.975, color="lightseagreen", linetype="dotdash") +
+  geom_vline(xintercept = r[2], color="lightseagreen", linetype="dotdash") +
+  geom_hline(yintercept = 0.025, color="indianred2", linetype="dotdash") +
+  geom_vline(xintercept = r[1], color="indianred2", linetype="dotdash") 
+
+```
+
+Using the two-tailed return, we can infer that we should be concerned with negative returns of more than -1.17% and positive returns of more than 1.13%.
+
+A third way of approaching this is to consider the business need for monitoring large exchange returns. In this case, if we are concerned with the devaluation of the USD value of income in Euros since our exchange rates are calculated as 1 Euro is valued at Exchange Rate number of US Dollars, the risk to our USD revenue comes from the negative returns. If we are only concerned with the 5% of most negative returns, then our plot would look like this:
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+r <- quantile(exrates.df$returns.USD.EUR, 0.05)
+
+ggplot(exrates.xts, aes(returns.USD.EUR)) +
+  labs(y = "Probability", x = "Return", title = "Cumulative Distribution of USD/EUR Exchange Returns (Absolute)") +
+  scale_x_continuous(breaks = c(0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5)) +
+  theme_light() +
+  stat_ecdf(colour = "thistle", size=0.4) +
+  geom_hline(yintercept = 0.05, color="indianred2", linetype="dotdash") +
+  geom_vline(xintercept = r[1], color="indianred2", linetype="dotdash") 
+
+```
+
+In this scenario we would be concerned with negative returns greater than -0.889%.
+
+### Question 2
+
+What is the history of correlations in the exchange rate markets? If this is a "history," then we have to manage the risk that conducting business in one country will definitely affect business in another. Further that bad things will be followed by more bad things more often than good things. We will create a rolling correlation function, `corr_rolling`, and embed this function into the `rollapply()` function (look this one up!).
+
+#### 2.2.1 Create Rolling Correlation
+
+To determine the history of correlations for the exchange rates, we first created the rolling correlation function. The rolling correlation function  receives an xts time series object with multiple series and calculates the correlation between each of the series. In order to do this efficiently, it performs an outer product of the time series and its inverse using R's 'cor' Pearson correlation function. It then takes the lower triangle (i.e. the cells below the diagonal) to the resulting matrix.  
+
+The results are returned as a vector of the correlations. In this case, since there are 4 time series there are 6 items in the vector (a full vector of 4x4, less the 4 items on the diagonal, less the 6 items above the diagonal).
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+#Create time series of just the returns, removing any NAs
+
+ALL.r <- (exrates.xts[, 1:4])
+
+#Create rolling correlation function and run
+
+corr_rolling <- function(x) {	
+  dim <- ncol(x)	
+  corr.r <- cor(x)[lower.tri(diag(dim), diag = FALSE)]	
+  return(corr.r)	
+}
+
+```
+
+#### 2.2.2 Use Rollapply Function
+
+We then used R's zoo library's rollapply function to step through the rows in a time series. On each step it takes the current observation and its n preceding items and calls the function to be performed on them. The results are assembled into a time series where the index of the time series is the index of the nth row in the input time series.  
+
+In this case:  
+
+* We pass the first four columns of our exrates time series.
+* We call our corr_rolling function to calculate the correlation coefficients for the data in each step.
+* We selected n=40 as this is a reasonable number to use for a Pearson correlation and because it represents a trail of two months of data for the correlation.
+* We do not expect a correlation calculation for the first 40 days because the function will not operate until there are sufficient observations accumulated.
+
+We note that although rollapply is a zoo function, the xts time series is built upon zoo and therefore zoo functions can be used on xts time series.
+
+With this configuration we expect the rollapply function to build a time series whose first observation is 40 days after the beginning of the exchange rate xts time series, where each column in the time series represents the trailing 40 days correlation coefficients of a pair of exchange rates.
+
+We applied appropriate column names to represent the pairs of exchange rate returns and created a plot to visually inspect the results.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Use Roll Apply
+corr.returns <- rollapply(ALL.r, width = 40, corr_rolling, align = "right", by.column = FALSE)
+
+#Remove first 40 records which are all NAs 
+corr.returns <-na.omit(corr.returns)
+
+head(corr.returns)
+str(corr.returns)
+
+#Create column headers and plot to represent relationships
+
+colnames(corr.returns) <- c("USD/EUR & USD/GBP",  
+                                "USD/EUR & USD/CNY", 
+                                "USD/EUR & USD/JPY", 
+                                "USD/GBP & USD/CNY",
+                                "USD/GBP & USD/JPY", 
+                                "USD/CNY & USD/JPY") 
+
+plot.xts(corr.returns, 
+         multi.panel = 3,
+         grid.ticks.on = FALSE,
+         minor.ticks = NULL,
+         yaxis.right = FALSE,
+         grid.col = "azure2",
+         main="Trailing 40 Day Correlations of Exchange Rate Pairs", 
+         xlab="",
+         cex = 0.5,
+         col=c("thistle", "aquamarine3", "darkseagreen2", "chocolate3", "cyan4", "darkgoldenrod3")
+         )
+
+```
+
+From this chart, we can see there is significant variation in correlation over time and each exchange rate pair has periods where its correlation diverges from the others. 
+
+EUR/GBP has the highest consistent correlation amongst the group and both had a similar trend line with JPY. Also, interestingly, a positive spike in the correlation between EUR/GBP/JPY had a nearly matching negative correlation spike with the CNY/JPY in Q3/2016.  
+
+### Question 3
+
+How related are correlations and volatilities? Put another way, do we have to be concerned that inter-market transactions (e.g., customers and vendors transacting in more than one currency) can affect transactions in a single market? Let's take the `exrate` data to understand how dependent correlations and volatilities depend upon one another.
+
+#### Data Analysis and Preparation
+
+Before beginning this analysis, we reviewed the statistical significance of performing monthly correlation and volatility calculations on our data. As already observed, our base data set is daily exchange rates. The project asks us to summarize these values into monthly correlation coefficients and standard deviations. For each exchange rate, for each month, we are being asked to perform the correlation and standard deviation calculations on approximately 20 observations (i.e. the number of working days in the month). Statistical significance is determined from the number of observations and the size of the population.  The larger the population, the more data points are needed for statistical significance. In this case, our population would be all the exchange trades executed in the month, a number so large it tends to infinity. A typical rule of thumb for large populations is 30 observations. Because our 20 readings per month do not meet this level, we note that these calculations are borderline statistically significant. There is some potential for error, meaning that adding a single additional data point could change the slope, causing different conclusions to be drawn. We should bear this in mind that while our results give us a good general sense for what is occurring, we should not be overly reliant on specific numbers drawn from this analysis.
+
+Further, we also noted that the data set provided contained a partial month (four days) of daily records for the month of January 2013. We removed this data before commencing our analysis because three data points is insufficient to effectively calculate a standard deviation (i.e. volatility) or cross-correlation. 
+
+When the January 2013 data was included, we calculated the following summary statistics for that month:  
+
+* USD/EUR volatility = 0.246  
+* Correlation between USD/EUR and USD/GBP = 0.985  
+
+If these data points had been included in our analysis, they would have been extreme outliers. The correlation is substantially higher than the maximum value in the EUR/GBP correlation. If January's correlation was included, it would have been the 100 percentile data point. The volatility is also lower than the lowest volatility and, if it was included, would have been the 0 percentile data point. What this tells us is that the four days in January were very similar to each other, which is not surprising for four consecutive days at month end.
+
+In Step 7 below, we explore how including January 2013 would have skewed the results further.  
+
+#### Question Response Segmentation
+
+The process for analyzing correlations and volatilities is long and complex, so to orient the reader we laid out the steps in advance:  
+
+1. Create a set of monthly cross-correlation tables, recording the correlation between exchange rate returns in the month.
+2. Create a set of monthly volatility measures for each exchange rate, recording the volatility of the returns for that exchange rate during the month.
+3. Merge the monthly correlations and volatilities into a single time series.
+4. Use the Fisher function to create a smoothed version of the monthly correlations, referred to as "rho"s.
+5. Focusing on the two currency pairs USD/EUR and USD/GBP, create both a quantile and a linear regression.  The y variable in these regressions is the smoothed correlations of the USD/EUR and USD/GBP exchange rates and the x variable is the volatility of EUR exchange rates.
+6. We display the results of the regressions in a plot and draw inferences.
+7. We demonstrate how including January would have effected the results.
+
+These steps are used as the subsequent sub-headings.
+
+##### 2.3.1: Monthly Cross-Correlation Tables
+
+In order to analyze exchange rate risk, we begin by calculating the monthly correlation coefficients associated with the returns in our time series.
+
+We pass the returns data of our time series, less January, into the apply.monthly function in order to summarize it by month. We then used the cor function to calculate the Pearson correlation coefficient between the different exchange rate returns.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+# Remove January Data
+
+ALL.r <- exrates.xts[, 1:4]
+ALL.r <- ALL.r[-c(1:3),]
+
+# apply.monthly() is xts command to summarize data in a monthly grain, applying a function to perform the summarize the data  
+
+# Specify 'cor' as the summarization function, which calculates a Pearson correlation coefficient  
+
+R.corr <- apply.monthly(as.xts(ALL.r), FUN = cor)	
+
+head(R.corr,3)
+tail(R.corr,3)
+str(R.corr)
+
+```
+
+The str command shows us that the result is an xts time series. The dimensions of the resulting xts object are `r dim(R.corr)[1]` rows, each row representing a month, and `r dim(R.corr)[2]` columns.  It is clear that each row represents a month, but with unlabeled columns, it is not immediately clear what the data is. 
+
+In order to see one month's worth of data, we created a matrix and selected one row. With this row, we use the kable function in knitr to show a single month's record represented as a 4x4 matrix instead of the 1x16 row.  
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+
+R.corr.1 <- matrix(R.corr[start(R.corr),], nrow=4,ncol=4,byrow=FALSE)
+rownames(R.corr.1) <-substring(colnames(ALL.r),9)
+colnames(R.corr.1) <- row.names(R.corr.1)
+knitr::kable(R.corr.1,digits=3,caption = "February 2013 Correlation Matrix - Exchange Returns in Four Currency Pairs")
+
+
+```
+
+From this matrix, it is clear that the apply.monthly tool using the 'cor' function has generated a series of monthly correlation matrices. For the month of February 2013, we can see the correlation matrix and note for this month, there was a strong correlation of 0.65 between the USD/JPY and USD/EUR exchange returns.
+
+##### 2.3.2: Monthly Volatility Tables  
+
+We then proceeded to calculate the monthly volatility for the returns in our time series.  Again we use the apply.mothly function and couple this with the "Column standard deviations" function colSds.  Standard deviation is used here as a measure of volatility because it  summarizes the degree to which the observations digress from the mean. More deviation in the values of the returns (i.e. returns much higher or lower than the mean), implies more volatility.
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+# apply.monthly() is an xts command to summarize data in a monthly grain 
+# Create column names
+# Review first three rows
+
+R.vols <- apply.monthly(as.xts(ALL.r), FUN = colSds)
+
+colnames(R.vols) <- c("EUR.vols", "GBP.vols", "CNY.vols", "JPY.vols")	
+
+head(R.vols,3)	
+
+```
+
+The result is an xts time series of `r dim(R.vols)[1]` rows, each row representing a month, and `r dim(R.vols)[2]` columns, each representing the volatility of the returns of one of the four exchange rates series.
+
+##### 2.3.3: Merge Monthly Cross-Correlation and Volatility Tables  
+
+Once we calculated the monthly correlations and volatility, we then merged them into one times series using the merge function.
+
+Before we did this, we had to prepare the data from the correlation matrix. Because each correlation matrix consists of a diagonal of 1's, and two triangles with identical information, we needed to select the columns that represented only one of the two triangles (we chose the upper triangle). The table below shows how the columns of R.corr map to the cells of the correlation matrix: 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Prepare a table to explain which cells are being incorporated into the corr/vol analysis
+
+r1 <- c("col 1","col 2","col 3","col 4")
+r2 <- c("col 5","col 6","col 7","col 8")
+r3 <- c("col 9","col 10","col 11","col 12")
+r4 <- c("col 13","col 14","col 15","col 16")
+
+layout <- as.data.frame(rbind(r1, r2, r3, r4))
+rownames(layout) <- colnames(layout) <- colnames(ALL.r[,1:4])
+
+kable(layout, align = "c")
+
+rm(r, r1, r2, r3, r4, layout) # remove unused variables to preserve memory
+
+```
+
+
+The diagonal is formed by columns [1,6,11,16], the lower triangle is formed by [5, 9, 10, 13, 14, 15] and the upper triangle is formed by [2, 3, 4, 7, 8, 12]. Therefore, we subsetted the c
+columns of the correlation matrix to only include the upper traingle [2, 3, 4, 7, 8, 12].
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Remove unwanted columns and apply column names 
+
+R.corr.sub <- R.corr[, c(2,3,4,7,8,12)] 	
+colnames(R.corr.sub) <- colnames(corr.returns) 
+
+head(R.corr.sub,3)
+
+```
+
+Once we removed the extra data, we then merged the time series of correlations and volatilities together and plotted the data in a graph.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Combine Correlation of Return and volatilities into one table
+
+R.corr.vols <- merge(R.corr.sub, R.vols)
+
+# Create new column headers
+
+new_cols <- c("EUR/GBP", "EUR/CNY", "EUR/JPY", "GBP/CNY", "GBP/JPY", "CNY/JPY", colnames(R.corr.vols[,7:10]))
+
+colnames(R.corr.vols) <- new_cols
+
+# Review data and format
+# Plot Results
+
+head(R.corr.vols,3)
+
+plot.xts(R.corr.vols, 
+         multi.panel = 3,
+         grid.ticks.on = FALSE,
+         minor.ticks = NULL,
+         yaxis.right = FALSE,
+         grid.col = "azure2",
+         main="Currency Pairs -  Exchange Return Correlation & Volatility", 
+         xlab="",
+         cex = 0.5,
+         col=c("thistle", "aquamarine3", "darkseagreen2", "chocolate3", "cyan4", "darkgoldenrod3", "dodgerblue2", "darkslategray3", "darksalmon", "darkorchid1")
+         )
+
+```
+
+##### 2.3.4: Smooth Correlation Coefficients   
+
+The plots show volatility in the correlations and from this, we decided to smooth the correlations to see a clearer picture and remove spurious changes. Here we created a function that performs the Fisher transformation on a vector of values, essentially smoothing them out.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# FUNCTION DEFNIITION
+# NAME: FISHER
+# PURPOSE: Perform Fisher Smoothing Function
+# INPUT(S): A vector of values
+# OUTPUT: A vector of values representing the smoothed version of the input
+
+fisher <- function(r)	
+{0.5 * log((1 + r)/(1 - r))}	
+
+```
+
+We call that function, passing into it the matrix of the correlation values from our correlation/volatility time series. We then formed the results of the function into a matrix six columns wide, with one row for each of the months in the time series:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+rho.fisher <- matrix(fisher(as.numeric(R.corr.vols[,1:6])), nrow = length(R.corr.vols[,1]), ncol = 6, byrow = FALSE)	
+
+head(rho.fisher, 6)
+
+```
+
+##### 2.3.5: Linear and Quantile Regressions  
+
+Once the correlation and volatility measurements were ready, we then proceeded to build the regression models.  These will describe the relationship between correlation and volatility. We selected the USD/EUR and USD/GBP data to invstigate further.  The first step is to extract the exchange rate volatility time series for USD/EUR and USD/GBP into vectors since the regression functions will expect vector inputs, not time series. We do this transformation by passing the time series into the as.numeric() function.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+EUR.vols <- as.numeric(R.vols[, "EUR.vols"])
+GBP.vols <- as.numeric(R.vols[, "GBP.vols"])
+
+```
+
+The linear regression fits a line to the (x,y) data by minimizing the errors (i.e. the difference between a point on the line and the actual y value).  One way of thinking about this is that the linear regression is estimating the mean of the data by drawing a line through the middle of the data.
+
+A quantile regression is similar to the linear regression in that it fits a line to the data, but in this case, it fits a line to a separate specified quantile of the data. For example, a quantile of 0.5 identifies the median in the way that linear regression identifies the mean. 
+
+Predictive models have two stages. The first stage is to train the model. The second stage is to use the trained model to make predictions. With regression, the training stage involves best-fitting a line through a set of data points to calculate the coefficients (i.e. slope of the line) for each x variable. The predictive stage then uses the formula developed in the training stage to calculate a value of y for all new values of x.
+
+We began this part by training the linear and quantile regression models. For the quantile model, we specified the model to be trained for every quantile from 0.05 to 0.95 in 0.05 increments. In each case we used the y~x notation for the regresssion formula, specifying correlation coefficient as y and volatility as x.
+
+We displayed the summary of the resulting trained linear regression model. The quantile regression summary is not displayed due to the voluminous output with one summary for each one of the quantiles.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# 1. We set `taus` as the quantiles of interest.
+# 2. We run the quantile regression using the `quantreg` package and a call to the `rq` function.
+# 3. We can overlay the quantile regression results onto the standard linear model regression.
+# 4. We can sensitize our analysis with the range of upper and lower bounds on the parameter estimates 
+
+
+# Create quantile regression model using rq with a linear regression model using lm
+
+taus <- seq(.05,.95,.05)	# specify sequence of quantiles
+fit.rq.EUR.GBP <- rq(rho.fisher[,1] ~ EUR.vols, tau = taus)	# train quantile regression
+fit.lm.EUR.GBP <- lm(rho.fisher[,1] ~ EUR.vols)	# train linear regression
+
+# Summarize results	
+
+#summary(fit.rq.EUR.GBP, se = "boot")
+summary(fit.lm.EUR.GBP, se = "boot")
+
+#Round coefficients for visual equation
+
+fit.lm.EUR.GBP2 <- round(fit.lm.EUR.GBP$coefficients, digits=3)
+
+```
+We observed the coefficients, and determined our regression formula as: 
+$$Correlation\ Coefficient = `r fit.lm.EUR.GBP2[1]` + (`r fit.lm.EUR.GBP2[2]` * Volatility) $$
+We then used the results of the quantile regression to plot the range of volatility at each quantile. 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Plot summary results
+
+plot(summary(fit.rq.EUR.GBP), parm = "EUR.vols")
+
+```
+
+In the diagram above, generated from the results of the quantile model, the x axis represents the quantiles. The y axis represents the smoothed volatily of the USD/EUR exchange rates. We note that there is higher variation in volatility (the width of the grey band) at the most extreme quantiles and relatively less variation in the lower central quantiles.  
+
+We then continued by employing these trained logistic and quantile regression models to predict values of correlation coefficients for given volatilies. On the quantile regression we only used three quantiles: 0.05, 0.5 and 0.95. While it is not strictly predictive to use regression models with the same x values as were used to train the model, by taking this approach we can generate a set of correlation coefficients from where our volatility values intersect the regression line.   
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Here we build the estimations and plot the upper and lower bounds.
+
+taus1 <- c(.05, 0.5, .95) 
+EUR.GBP.p <- predict(rq(rho.fisher[,1] ~ EUR.vols, tau = taus1)) # train quantile regression
+EUR.GBP.lm.p <- predict(lm(rho.fisher[,1] ~ EUR.vols)) # train linear regression
+
+colnames(EUR.GBP.p) <- c(paste("tau",taus1[1]*100, sep = ""), paste("tau",taus1[2]*100, sep = ""), paste("tau",taus1[3]*100, sep = ""))
+
+head(EUR.GBP.p)
+
+#check length
+#length(rho.fisher[, 1])
+#length(EUR.GBP.p[, 1])
+#length(EUR.GBP.p[, 2])
+#length(EUR.GBP.p[, 3])
+#length(EUR.GBP.lm.p)
+
+
+# Create data frame and plot with model output 
+
+EUR.GBP.CI <- data.frame(x = EUR.vols, y = rho.fisher[, 1], y.5 = EUR.GBP.p[, 1],  y.50 = EUR.GBP.p[, 2], y.95 = EUR.GBP.p[, 3], y.lm <- EUR.GBP.lm.p )
+
+head(EUR.GBP.CI,3)
+
+```
+
+That's a lot of information to interpret. Essentially we have used regression to ask what's the relationship between the volatility in USD/EUR exchange rates and the correlation between the EUR and GBP exchange rates. We used appropriate techniques to identify measures of centrality between these currencies (mean and median), as well as measures of 5% and 95% confidence. Next, we plotted the relationships between volatility and correlation.
+
+##### 2.3.6: Plot Regressions and Interpret  
+
+We use ggplot() to plot each of the lines:  
+
+* 5% confidence (red-dashed)
+* 95% confidence (pink dashed)
+* 50% quantile ie median (blue)
+* mean, ie linear regression
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(EUR.GBP.CI, aes(x, y)) +
+    geom_point() +
+    geom_line(aes(y = y.5), colour = "red", linetype = "dashed") +
+    geom_line(aes(y = y.95), colour = "pink", linetype = "dashed") +
+    geom_line(aes(y = y.50), colour = "blue") +
+    geom_line(aes(y = y.lm), colour = "blue", linetype = "dashed")
+
+```
+
+
+From this diagram, we can draw the following inferences:  
+
+* The presence of a slope on the linear and quantile regressions indicates that there is a relationship between the volatility of US/EUR returns and the correlation of the USD/EUR and USD/GBP exchange rates. Meaning, as the volatility of the USD/EUR exchange rate increases, it is more likely that the USD/GBP rate will behave similarly!
+* If we are concerned about volatility of returns in EUR, we should also be concerned about the volatility in GBP at the same time. This is important to understand for employing currency hedges against extreme exchange rate fluctuations.
+
+##### 2.3.7: Impact of a Partial Month (January 2013)
+
+If January 2013 had been included in the data for Question 3, the following would have been our results for the the EUR/GBP relationship.  
+
+First, we created a data frame containing the EUR/GBP correlations and EUR volatilities, appended the January record into it, and then created a plot to review the results. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Create data frame
+
+df.check <- cbind(EUR.vols, as.numeric(R.corr[,2]))
+
+# Add January results
+
+df.check <- rbind(c(0.246, 0.985), df.check )
+
+# Create column names
+
+colnames(df.check) <- c("Vol", "Corr")
+
+# Show results on chart
+
+plot(df.check, 
+
+     col=ifelse(df.check[,2]==0.985, "red", "black"),
+
+     pch=ifelse(df.check[,2]==0.985, 15, 1))
+
+
+```
+
+We observed that the January data point, highlighted in red, is an outlier from the overall pattern. 
+
+We then ran the linear regression twice, once with the January data and once without.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+lm1 <- lm(df.check[,1] ~ df.check[,2]) # linear regression - include Jan13
+
+lm2 <- lm(df.check[-1,1] ~ df.check[-1,2]) # linear regression - exclude Jan13
+
+
+c(lm1$coefficients[2], lm2$coefficients[2]) # regression slopes
+
+```
+
+Since our objective in Question 3 was to understand the relationship between correlation and volatility in exchange rates, by looking at the slope of a linear regression we can see that the inclusion of the extreme outlier data point of January caused the slope of the regression to change from `r round(lm2$coefficients[2],digits=3)` to `r round(lm1$coefficients[2], digits=3)`, a 5% change in the slope of the relationship.  
+
+Any conclusions that we drew upon the interdependence of correlation and volatility, had we included the January data, would have contained an error of 5%.
+
+We can visually observe the impact of the erroneous data point on the relationship here where the red regression line includes January 2013 and the blue line excludes it:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+plot(df.check, 
+
+     col=ifelse(df.check[,2]==0.985, "red", "black"),
+
+     pch=ifelse(df.check[,2]==0.985, 15, 1))
+
+abline(lm1, col="blue")
+
+abline(lm2, col="red")
+
+```
+
+
+## Conclusion
+
+In this project, we reviewed the exchange rates for the EU Euro (EUR), GB Pound (GBP), Chinese Yuan (CNY), and Japanese Yen (JPY) as represented in US Dollars (USD) for a series of dates from 01/28/13 to 01/26/18.  
+
+In part one, we calculated the exchange rate return and the size and direction for each return. We then plotted the values in graph form to determine how these figures behaved for each currency. From this graph, we found the returns for each currency had periods of volatility, but that they appeared independent from each other thus concluding that these factors appeared dependent on local economic events, not global/US based events. 
+
+In part two, we investigated how these currencies interacted with each other. In the first question, we reviewed the US/EUR exchange rate returns against certain thresholds to identify certain behaviors that would require action by management. If management was concerned with the lowest 5% of negative returns, we found that they would want to identify any returns below -0.889%. We also found that 95% of all exchange rate returns were less than 1.15%. From this, we could advise leadership to hedge against any EUR exchange rate returns in excess of this rate. Even further, using a two-tailed return approach, we found that management may want to monitor and act on negative returns of more than -1.17% and positive returns of more than 1.13%.
+
+In the second question of part 2, we began to investigate the correlations and volatility between the currencies. For correlation, we found that the US/EUR and US/GBP had the highest consistent correlation amongst the group. These currencies had similar trend lines with JPY throughout the time period as well. Interestingly, a positive spike in the correlation between EUR/GBP/JPY had a nearly matching negative correlation spike with the CNY/JPY in Q3/2016.    
+
+For the final question in part 2, we summarized the correlations and volatilities by month and investigated two currency pairs USD/EUR and USD/GBP further with creating regression models. The regressions for this pair indicated that there is a relationship between the volatility of US/EUR returns and the correlation of the USD/EUR and USD/GBP exchange rates. Meaning that as the volatility of the USD/EUR exchange rate increases, it is more likely that the USD/GBP rate will behave similarly.
+
+## Skills Needed 
+
+The following skills were needed to complete this project.
+
+  * Data import and preparation using filtering and removal of NAs.
+  * Conversion of exchange rates into returns using log(diff()).
+  * Use of conditional logic (ifelse) to determine direction of change.
+  * Merging and binding functions to create data frames/times series as necessary.
+  * Use of quantile function to create thresholds.
+  * Creation of a custom functon, data moments, to identify data mean, median, standard            deviation, inter-quartile range, skewness and kurtosis.
+  * Use of the cor function to determine the Pearson correlation coefficients and apply.monthly     to summarize in monthly time frames. 
+  * Use of the colSds function (Column standard deviations) to determine volalitity and            apply.monthly to summarize in monthly time frames,
+  * Creation of the custom functon, fischer, to perform the Fisher transformation on a vector      of values, smoothing them out.
+  * Use of rq and lm functions to model quantile and linear regressions and identify equation      for prediction.
+  * Advanced use of ggplot and knitr to create tables and graphs.
