@@ -1,0 +1,1193 @@
+---
+title: 'Metal Market Risk'
+output: 
+  flexdashboard::flex_dashboard:
+  orientation: columns
+  vertical_layout: fill
+runtime: shiny
+---
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+### R Envirnment Configuration
+library(ggplot2)
+library(shiny)
+library(QRM)
+library(qrmdata)
+library(xts)
+library(zoo)
+library(psych)
+library(knitr)
+library(lubridate)
+library(flexdashboard)
+require (quantreg)
+require(reshape2)
+library(quadprog) #
+library(matrixStats)
+library(moments)
+library(plotly) 
+rm(list = ls())
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#setwd("C:/data")
+orig_data <- na.omit(read.csv(file = file.choose(),header = TRUE))
+
+#orig_data <- read.csv(file = "filepath.csv",  header = TRUE)
+
+data <- orig_data
+
+data$DATE <- as.Date(data$DATE, format="%m/%d/%Y")
+
+```
+
+```{r}
+# flexdashboard layout begins here
+```
+
+Preparation  
+===================================== 
+
+Column: Data Assessment  {.tabset}
+--------------------------------------------------------------------------
+
+### Project Briefing   
+
+#### Purpose, Process, Product  
+
+Various R features and finance topics will be reprised in this chapter. Specifically we will practice reading in
+data, exploring time series, estimating auto and cross correlations, and investigating volatility clustering in
+financial time series. We will summarize our experiences in debrief.
+
+#### Initial Configuration and Data Exploration  
+
+Problem: A freight forwarder with a fleet of bulk carriers wants to optimize their portfolio in the metals markets with entry into the nickel business and use of the tramp trade. Tramp ships are the company's "swing" option without any fixed charter or other constraint. They allow the company flexibility in managing several aspects of freight uncertainty. They have allocated $250 million to purchase metals. The company wants us to:  
+
+1. Retrieve and begin to analyze data about potential commodities to diversify into
+2. Compare potential commodities with existing commodities in conventional metals spot markets
+3. Begin to generate economic scenarios based on events that may, or may not, materialize in the commodities
+4. The company wants to mitigate their risk by diversifying their cargo loads
+
+Identify the optimal combination of Nickel, Copper, and Aluminium to trade:  
+
+1. Product: Metals commodities and freight charters  
+2. Metal, Company, and Geography:  
+
+  * Nickel: MMC Norilisk, Russia  
+  * Copper: Codelco, Chile and MMC Norilisk, Russia  
+  * Aluminium: Vale, Brasil and Rio Tinto Alcan, Australia
+
+3. Customers: Ship Owners, manufacturers, traders
+4. All metals traded on the London Metal Exchange
+
+### Commodity Prices   
+
+```{r}
+ggplot(data=data, aes(x=DATE)) +
+  theme_light() +
+  geom_line(aes(y=nickel), color="thistle") +
+  geom_line(aes(y=copper), color="orange") +
+  geom_line(aes(y=aluminium), color="darkgrey") +
+  ggtitle("Commodity Price History")+
+  labs(x= "Date", y="Price") +
+  annotate("text", x = as.Date("2017-01-01") , y = 12500, label = "Nickel", color="thistle") +
+  annotate("text", x = as.Date("2017-01-01")  , y = 7000, label = "Copper", color="orange") +
+  annotate("text", x = as.Date("2017-01-01") , y = 2500, label ="Aluminium", color="darkgrey" )
+
+```
+
+
+```{r}
+
+# Compute log differences percent
+# using as.matrix to force numeric
+# type
+data.r <- diff(log(as.matrix(orig_data[, -1]))) * 100
+
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Create size and direction
+size <- na.omit(abs(data.r)) # size is indicator of volatility
+
+# head(size)
+colnames(size) <- paste(colnames(size),".size", sep = "") # Teetor
+direction <- ifelse(data.r > 0, 1, ifelse(data.r < 0, -1, 0)) # another indicator of volatility
+
+colnames(direction) <- paste(colnames(direction),".dir", sep = "")
+
+# Convert into a time series object:
+# 1. Split into date and rates
+dates <- as.Date(data$DATE[-1], "%m/%d/%Y")
+dates.chr <- as.character(data$DATE[-1])
+# str(dates.chr)
+
+## chr [1:1297] "3/15/2017" "3/14/2017" "3/13/2017" "3/10/2017" ...
+values <- cbind(data.r, size, direction)
+# for dplyr pivoting and ggplot2 need
+# a data frame also known as 'tidy
+# data'
+
+data.df <- data.frame(dates = dates,
+                      returns = data.r, 
+                      size = size, 
+                      direction = direction)
+
+data.df.nd <- data.frame(dates = dates.chr,
+                         returns = data.r, 
+                         size = size, 
+                         direction = direction,
+                         stringsAsFactors = FALSE)
+
+# non-coerced dates for subsetting on
+# non-date columns 2. Make an xts
+# object with row names equal to the
+# dates
+
+data.xts <- na.omit(as.xts(values, dates)) #order.by=as.Date(dates, '%d/%m/%Y')))
+
+data.zr <- as.zooreg(data.xts)
+returns <- data.xts
+# Market analysis of the stylized
+# facts and market risk preliminaries
+```
+
+### Returns  
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+# Reshape the time series data by unpivoting so that the column names are a field
+
+tmp <- melt(data = data.df[,1:4], 
+            id = "dates", # date column 
+            measure.vars = c(2:4)) # the three returns columns
+
+# Create plots
+
+ggplot(data = tmp, aes(x=dates, y=value, colour=variable)) +
+  theme_light() +
+  geom_line() + 
+  scale_color_manual(name  ="Variable",values=c("thistle", "orange", "dark grey"),
+            labels=c("Return Nickel", "Return Copper", "Return Aluminum")) +
+  facet_wrap(~variable, ncol=1 )+ ggtitle("Summary of Returns") +
+  labs(x= "Dates", y="Value")
+
+```
+
+### Size and Direction  
+
+```{r echo=FALSE, results='HIDE',message=TRUE}
+# Reshape the time series data by unpivoting so that the column names are a field
+
+tmp <- melt(data = data.df[, c(1,5,6,7)],
+            id = "dates", # date column 
+            measure.vars = c(2:4)) # the three returns columns
+# Create plots
+
+ggplot(data = tmp, aes(x=dates, y=value, colour=variable))+
+  theme_light() +
+  geom_line() + 
+  scale_color_manual(name  ="Variable",values=c("thistle", "orange", "dark grey"),labels=c("Nickel", "Copper", "Aluminum")) +
+  facet_wrap(~variable, ncol=1 )+ 
+  ggtitle("Commodity") +
+           xlab("Adjusted Price") + ylab("Observations")
+
+```
+
+Column: Correlation & Regression   {data-width=350}
+--------------------------------------------------------------------------
+
+### Discussion  
+
+In the prices plot to the left, we observe that the prices of the metals, particularly Nickel display volatility as evidenced by intermittent period of see-sawing price changes.
+
+The baseline data set was daily prices of three commodities: Nickel, Aluminum and Copper.  Here we can see the dates range from `r min(data$DATE)` to `r max(data$DATE)`, and there are `r nrow(data)` observations included in the data.  Summarizing by weekday, we can see here that there are approximately 5 years of daily data, almost evenly distributed across weekdays.  There is no data for weekends, and we hypothesize that there is data missing on public holidays (in some undefined market).
+
+```{r}
+daycounts <- factor(wday(data$DATE))
+levels(daycounts) <- c("Mon", "Tue", "Wed", "Thu", "Fri")
+
+kable(t(as.matrix(summary(daycounts))), caption="Distribution of Data By Weekday") 
+```
+
+After calculating daily returns using the log of the difference of daily prices, R's summary() command shows us the statistical summary of the daily returns of each metal.  All values are percentages.
+
+```{r}
+# display summary
+summary(data.r)
+```
+
+In the returns plots on the left, we see that volatility is indicated by returns swinging between positive and negative extremes on successive days.  We also see the volatility occurring in the absolute returns as blocks of higher peaks.
+
+
+Correlation    
+===================================== 
+
+Column: Overview  {data-width=350}
+--------------------------------------------------------------------------
+
+### Overview
+
+To compare our metal commodities to each other, we chose to use correlation and regression techniques, as well as the data moments function. Correlation and regression helps us to understand the degree to which the metal prices affect each other or have a common response to economic events. Through these techniques, we can see these relationships both on a particular day and with a delayed effect. Data moments is also a useful tool in understanding the base statistics found in each variable.  
+
+When developing a portfolio of metals, it is important to understand how the metals interact with each other to ensure proper diversification.  
+
+Column: Charts  {.tabset}
+--------------------------------------------------------------------------
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# FUNCTION DEFINITION
+# corr.rolling()
+# INPUT: x - an xts object with two or more series
+# OUTPUT: corr.r - an xts object containing the correlations between the series
+# TRANSFORMATIONS: - calculate the correlation coefficients of each time series
+
+corr.rolling <- function(x){
+  dim <- ncol(x)
+  corr.r <- cor(x)[lower.tri(diag(dim),
+                             diag = FALSE)]
+  return(corr.r)
+}
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ALL.r <- data.xts[, 1:3] # Only three series here
+
+window <- 90 #define the number of observations in each correlation calc
+
+corr.returns <- rollapply(ALL.r, width = window,
+                          corr.rolling, 
+                          align = "right", 
+                          by.column = FALSE)
+
+# define column names
+colnames(corr.returns) <- c('Ni.Cu', 'Ni.Al','Cu.Al')
+
+# create a data frame of output
+corr.returns.df <- data.frame(Date = index(corr.returns),
+                              nickel.copper = corr.returns[, 1],
+                              nickel.aluminium = corr.returns[, 2], 
+                              copper.aluminium = corr.returns[, 3])
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Market dependencies
+library(matrixStats)
+
+R.corr <- apply.monthly(as.xts(ALL.r), FUN = cor)   #Calculate monthly summary of correlation
+
+R.vols <- apply.monthly(ALL.r, FUN = colSds) # from MatrixStats\t
+
+# Form correlation matrix for one month
+R.corr.1 <- matrix(R.corr[20, ], nrow = 3, ncol = 3, byrow = FALSE)
+
+# set row and column names
+rownames(R.corr.1) <- colnames(ALL.r[,1:3])
+colnames(R.corr.1) <- rownames(R.corr.1)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# create a time series of just the correlations
+R.corr <- R.corr[, c(2, 3, 6)]
+colnames(R.corr) <- colnames(corr.returns)
+
+colnames(R.vols) <- c("nickel.vols", "copper.vols", "aluminium.vols")  
+
+#correlation how you move with other and stdv how you move from your mean.
+R.corr.vols <- na.omit(merge(R.corr,R.vols))
+nickel.vols <- as.numeric(R.corr.vols[, "nickel.vols"])
+copper.vols <- as.numeric(R.corr.vols[, "copper.vols"])
+aluminium.vols <- as.numeric(R.corr.vols[, "aluminium.vols"])
+
+library(quantreg)
+# hist(rho.fisher[, 1])
+nickel.corrs <- R.corr.vols[, 1]
+# hist(nickel.corrs)
+# class(nickel.corrs)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# FUNCTION 
+# INPUTS:
+# one, two - a pair of vectors representing time series
+# main - a title for use on a chart
+# lag - a correlation lag parameter
+# color - a color to use for a plot
+# OUTPUTS - a cross correlation function (ccf) plot
+
+run_ccf <- function(one, two, main = title.chg, lag = 20, color = "red") {
+      # one and two are equal length series
+      # main is title lag is number of lags
+      # in cross-correlation color is color
+      # of dashed confidence interval
+      # bounds
+      stopifnot(length(one) == length(two)) # error out if diff length TS
+      one <- ts(one) # convert to time series
+      two <- ts(two) # convert to time series
+      main <- main
+      lag <- lag
+      color <- color
+      # now run the ccf plot
+      ccf(one, 
+          two, 
+          main = main, 
+          lag.max = lag,
+          xlab = "", 
+          ylab = "", 
+          ci.col = color)
+      # end run_ccf
+      }
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+## Load the data_moments() function
+## data_moments function 
+## INPUTS: r
+## vector OUTPUTS: list of scalars
+## (mean, sd, median, skewness,
+## kurtosis)
+data_moments <- function(data) {
+  library(moments) 
+  data <- as.matrix(data)
+  mean.r <- colMeans(data)
+  median.r <- colMedians(data)
+  sd.r <- colSds(data)
+  IQR.r <- colIQRs(data)
+  skewness.r <- moments::skewness(data) 
+  kurtosis.r <- moments::kurtosis(data)
+  
+  result <- data.frame(mean = mean.r,
+                       median = median.r, 
+                       std_dev = sd.r,
+                       IQR = IQR.r, 
+                       skewness = skewness.r,
+                       kurtosis = kurtosis.r)
+  return(result) 
+  }
+```
+
+### Statistical Summary  
+
+First, we employed the data_moments() function to present the summary statistics for our signed returns and absolute returns distributions. This provided a base understanding of each data variable.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#Run data_moments()
+# Run data_moments()
+answer <- data_moments(data.xts[,1:6]) 
+answer <- round(answer, 4) 
+knitr::kable(answer, digits = 3) # Build pretty table
+
+```
+### Auto and Cross Correlations 
+
+####
+
+We then began our analysis into the internal and cross relationships the commodities had with each other by using the acf() autocorrelation and ccf() cross correlation functions on the returns and size. Auto and cross correlations functions show us the correlation coefficient of the time series for the same date (lag 0) and for a set of days lag. The lag essentially asks, does one time series predict another time series x days in the future? 
+
+Lagged correlations are valuable as their predictive power can be used to make speculative investments.
+
+####
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+acf(coredata(data.xts[, 1:3])) # returns
+acf(coredata(data.xts[, 4:6])) # sizes
+
+# run first to look at CCF of signed returns
+
+title <- "Nickel-Copper: Returns"
+one <- data.zr[, 1]
+two <- data.zr[, 2]
+run_ccf(one, 
+        two, 
+        main = title, 
+        lag = 20,
+        color = "red")
+
+# now for volatility (sizes of returns)
+
+one <- abs(data.zr[, 1])
+two <- abs(data.zr[, 2])
+title <- "Nickel-Copper: Volatility"
+run_ccf(one, 
+        two, 
+        main = title, 
+        lag = 20,
+        color = "red")
+
+```
+
+####
+
+In review of these charts, we identified:
+
+* On the diagonal of auto-correlations, the only significant marks are on zero lag. This indicates that one day's return does not predict subsequent days returns for any metal. The only exception to this is aluminum, whose return yesterday is mildly predictive that today's return will be of the opposite sign. By this past trend, we can determine that the next time the price goes down for aluminum, we can expect high returns the next day. 
+
+* Copper and nickel have some positive relationships at zero lag (they tend to behave the same way on the same day). We can predict nickel price by lagging the copper price, i.e. the nickel price 4 days ago and 6 days ago is also predictive of the copper price today. The other lags are at best marginal.  Copper can predict nickel and nickel can predict the copper, representing cross correlation. 
+
+* Nickel and aluminum have a modest same-day, same-direction correlation. 
+
+We observe similar patterns in the fourth chart of correlations of absolute returns. The exception here is aluminum, where mutliple successive prior days are predictive of the current day.  The difference between aluminum on the signed and absolute returns suggests that aluminum return volatility occurs in clusters, with large days being predictive of future large days, and small days being predictive of future small days.
+
+### Monthly Correlations and Volatility  
+
+####
+
+We then began to analyze the history of the correlations for the metal exchange rates by using the rolling correlation and rollapply functions. The rolling correlation function receives an xts time series object with multiple series and calculates the correlation between each of the series. 
+
+In order to do this efficiently, it performs an outer product of the time series and its inverse using R's 'cor' Pearson correlation function. It then takes the lower triangle (i.e. the cells below the diagonal) to the resulting matrix. The results are returned as a vector of the correlations. 
+
+The rollapply function is used to step through the rows in a time series. On each step it takes the current observation and its n preceding items and calls the function to be performed on them. The results are assembled into a time series where the index of the time series is the index of the nth row in the input time series.
+
+In this case:  
+
+* We pass the first three columns of our data time series.
+* We call our corr_rolling function to calculate the correlation coefficients for the data in each step.
+* We selected n=90 as this is a reasonable number to use for a Pearson correlation
+* We do not expect a correlation calculation for the first 89 days because the function will not operate until there are sufficient observations accumulated.
+
+With this configuration, we expect the rollapply function to build a time series whose first observation is 90 days after the beginning of the metal rate xts time series, where each column in the time series represents the trailing 90 days correlation coefficients of a pair of metal rates.
+
+Below is a graph to represent the results:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE} 
+
+#Create column headers and plot to represent relationships
+
+colnames(corr.returns) <- c("nickel.copper",  
+                                "nickel.aluminum", 
+                                "copper.alumnum") 
+
+plot.xts(corr.returns, 
+         multi.panel = 3,
+         grid.ticks.on = FALSE,
+         minor.ticks = NULL,
+         yaxis.right = FALSE,
+         grid.col = "azure2",
+         main="Trailing 90 Day Correlations of Metal Pairs", 
+         xlab="",
+         cex = 0.5,
+         col=c("thistle", "aquamarine3", "darkseagreen2", "chocolate3", "cyan4", "darkgoldenrod3")
+         )
+```
+
+#### 
+
+Once we've determined the rolling correlation, we then used apply.monthly to summarize the results by month. We also used the cor function to calculate the Pearson correlation coefficient between the different exchange rate returns.
+
+In order to see one month's worth of data, we created a matrix and selected one row. Below is a representation of the 20th set of correlations, which correspond to the month of August 2013.
+
+```{r}
+
+# display formatted table
+knitr::kable(R.corr.1, digits=4)
+
+```
+
+####
+
+Once the correlations were determined and summarized monthly, we then proceeded to calculate the monthly volatility for the returns in our time series. Again we use the apply.monthly function and couple this with the "Column standard deviations" function colSds. Standard deviation is used here as a measure of volatility because it summarizes the degree to which the observations digress from the mean. More deviation in the values of the returns (i.e. returns much higher or lower than the mean), implies more volatility.
+
+Once we calculated both the monthly correlations and volatility, we then merged them into one times series using the merge function. Because each correlation matrix consists of a diagonal of 1's, and two triangles with identical information, we needed to select the columns that represented only one of the two triangles (we chose the upper triangle).
+
+Below is a graph to represent our results of having merged correlations and volatility together: 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+plot.xts(R.corr.vols, 
+         multi.panel = 3,
+         grid.ticks.on = FALSE,
+         minor.ticks = NULL,
+         yaxis.right = FALSE,
+         grid.col = "azure2",
+         main="Metal Market - Correlation & Volatility", 
+         xlab="",
+         cex = 0.5,
+         col=c("thistle", "aquamarine3", "darkseagreen2", "chocolate3", "cyan4", "darkgoldenrod3", "dodgerblue2", "darkslategray3", "darksalmon", "darkorchid1")
+         )
+
+```
+
+### Regression  
+
+#### 
+
+Having reviewed the correlations, we then created a regression model and selected the nickel and copper data to investigate further.
+
+The regression is of the format $y = ax$ where $a$ is the slope coefficient calculated by the regression. This summary plot displays the optimum regression coefficient for each decile (on the Y axis), with the deciles of data points on the X axis. It then links the points as a black dashed line, with a grey confidence interval showing the spread of possible correlation coefficients for each decile of data points.  It overlays the correlation coefficients for the 0.05, 0.5 and 0.95 quantiles as horizontal red lines.  The red middle line is our quantile regression model coefficient for the 0.5 (median) quantile.  The red dotted lines are confidence level for correlation - the 0.05 and 0.95 quantiles.  
+
+Below is a graph of the quantile regression:
+
+#### 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+taus <- seq(0.05, 0.95, 0.05) # Roger Koenker UI Bob Hogg and Allen Craig
+fit.rq.nickel.copper <- rq(nickel.corrs ~ copper.vols, tau = taus)
+fit.lm.nickel.copper <- lm(nickel.corrs ~ copper.vols)
+
+plot(summary(fit.rq.nickel.copper), 
+     parm = "copper.vols",
+     main = "Nickel-Copper Correlation Sensitivity to Copper Volatility")
+```
+
+####
+
+We can interpret this plot by asking whether the calculated coefficients for each decile fall within the red confidence interval. In an ideal model the black data points would run along the solid red line, and the grey bounds would align with the red dotted lines.  This model falls far short of that ideal. For this regression to be reliable, the black data points would all be within the red dotted lines. 
+
+We can see for the central and higher quantiles that the coefficents are within the red dotted lines of the confidence interval for the regression coefficient. For the lower quantiles the coefficients are outside the confidence interval. In practical terms, this means that regression is not a good way to model the relationship between correlation and volatility, because a regression model could not simultaneously explain the relationship for the higher quantiles (ie most positive returns) as well as the lower quantiles (ie the most negative returns).
+
+One way to think of this is that the relationship between correlation and volatility is non-linear. We may be able to develop one linear model to represent the lower quantiles (0.0-0.4), and another linear model to represent the higher quantiles (0.5-1.0).
+
+
+Value at Risk  
+====================================
+
+Column: Value at Risk    {data-width=350}
+--------------------------------------------------------------------------
+
+### Overview    
+
+Value at Risk (VaR) is a technique that identifies the most extrement negative events that might harm our business so that mitigating steps (eg insurance) can be taken to protect our profit from such events.  With VaR we study the distribution of market events, and agree a threshold, beyond which we may wish to protect from events.
+
+We can use R's quantiles function to identify the return value associated with our threshold.
+
+The concept of Expected Shortfall (ES) works hand-in-hand with VaR, in that it is defined as the mean of the events beyond the threshold.  One way to think of it is that, if VaR defines a very bad day, ES is how bad we should expect (on average) very bad days to be.
+
+We should discuss here what our VaR threshold should be.  Because our company will hold physical commodities while they are shipped, we have a long exposure to the commodities (ie we own them).  We are therefore liable to negative returns - if there is a negative return, the price falls, and we sell our metals for less than we bought them.
+
+Our quantiles are laid out in increasing order of size, so the smallest (ie most negative) returns are in the lowest quantiles.  We therefore need to look at VaR as being a very low quantile (we choose 0.05), and consider ES as the mean of the values below the 0.05 quantile.
+
+
+Column: VaR Threshold  {.tabset} 
+--------------------------------------------------------------------------
+
+### Value at Risk  
+
+####  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+returns1 <- returns[, 1]
+colnames(returns1) <- "Returns" #kluge to coerce column name for df
+returns1.df <- data.frame(Returns = returns1[,1], 
+                          Distribution = rep("Historical",each = length(returns1)))
+
+# define VaR threshold has 
+alpha <- 0.95 # reactive({ifelse(input$alpha.q>1,0.99,ifelse(input$alpha.q<0,0.001,input$alpha.q))})
+
+# Value at Risk
+VaR.hist <- quantile(returns1, 1-alpha) # note here correction
+VaR.text <- paste("Value at Risk =", round(VaR.hist, 2))
+
+# Determine the max y value of the 
+# desity plot. This will be used to
+# place the text above the plot
+VaR.y <- max(density(returns1.df$Returns)$y)
+# Expected Shortfall
+
+ES.hist <- mean(returns1[returns1 < VaR.hist]) # note here correction
+ES.text <- paste("Expected Shortfall =", 
+                 round(ES.hist, 2))
+
+p4 <- ggplot(returns1.df, 
+            aes(x = Returns, fill = Distribution)) + 
+    theme_light() +
+  geom_density(alpha = 0.5) + 
+  geom_vline(aes(xintercept = VaR.hist), 
+             linetype = "dashed", 
+             size = 0.1,
+             color = "firebrick1") + 
+  geom_vline(aes(xintercept = ES.hist), 
+             size = 0.1, 
+             color = "firebrick1") +
+  annotate("text", x = 2 + VaR.hist, y = VaR.y * 1.05, label = VaR.text) +
+  annotate("text", x = 1.5 + ES.hist, y = VaR.y * 1.1, label = ES.text) +
+  scale_fill_manual(values = "dodgerblue4")+
+  labs(x= "Returns", y="Density")
+
+ggplotly(p4)
+
+```
+
+####
+
+The plot above shows the distribution of daily returns for Nickel.  The dashed line is the  Value at risk marker, the solid line is our ES marker. This is where we know we are 95% confident that we will not lose more than 2.66%.  For the remaining 5% of days, our average loss is -3.62%. 
+
+### Portfolio VaR 
+
+####  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Do the same for returns 2 aand 3
+# Now for Loss Analysis Get last prices
+
+data <- orig_data # start over with the original data
+
+price.last <- as.numeric(tail(data[,-1], n = 1))
+# Specify the positions
+position.rf <- c(1/3, 1/3, 1/3)
+# And compute the position weights
+
+w <- position.rf * price.last
+# Fan these the length and breadth of
+# the risk factor series
+weights.rf <- matrix(w, 
+                     nrow = nrow(data.r),
+                     ncol = ncol(data.r), 
+                     byrow = TRUE)
+
+# head(rowSums((exp(data.r/100)-1)*weights.rf),
+# n=3) We need to compute exp(x) - 1
+# for very small x: expm1
+# accomplishes this
+# head(rowSums((exp(data.r/100)-1)*weights.rf),
+# n=4)
+
+loss.rf <- -rowSums(expm1(data.r/100) * weights.rf)
+loss.rf.df <- data.frame(Loss = loss.rf, Distribution = rep("Historical", each = length(loss.rf)))
+
+```
+
+####  
+
+We then extend this idea to construct a portfolio of different metals.  In the first instance, we construct a portfolio of positions, each position being one third of the price of our three metals (based on the most recent price).  This is somewhat like a Market Capitalization weighted stock index.  The total value of this portfolio is \$ `r format(sum(weights.rf[1,]), big.mark=",", scientific=FALSE, digits=2)`.  
+
+We are interested in understanding the performance of a portfolio of \$250M, so we can later extrapolate by multiplying results by 250M/9696.67.
+
+We create a time series of the returns of this portfolio based on the historical returns of each metal's impact on our portfolio holdings.
+
+In our portfolio construction we introduce a negative multiplier of our returns, so that the returns that harm our business are the most positive, as indicated by the largest quantiles.  We therefore select a 0.95 VaR threshold and consider ES as the mean of the items beyond that threshold.
+
+With our portfolio constructed, we perform our VaR analysis.
+
+####
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+## Simple Value at Risk and Expected
+## Shortfall
+
+alpha.tolerance <- 0.95
+VaR.hist <- quantile(loss.rf, probs = alpha.tolerance, names = FALSE)
+## Just as simple Expected shortfall
+ES.hist <- mean(loss.rf[loss.rf > VaR.hist])
+
+VaR.text <- paste("Value at Risk =\n", round(VaR.hist, 2)) # ='VaR'&c12
+ES.text <- paste("Expected Shortfall \n=", round(ES.hist, 2))
+title.text <- paste(round(alpha.tolerance * 100, 0), "% Loss Limits")
+
+# using histogram bars instead of the
+# smooth density
+p3 <- ggplot(loss.rf.df, 
+       aes(x = Loss, fill = Distribution)) + 
+  theme_light() +
+  geom_histogram(alpha = 0.8) +
+  geom_vline(aes(xintercept = VaR.hist), 
+             linetype = "dashed", 
+             size = 0.1,
+             color = "firebrick1") + 
+  annotate("text", x = VaR.hist, y = 40, label = VaR.text) +
+  #geom_vline(aes(xintercept = ES.hist), 
+  #           size = 0.1, 
+  #           color = "firebrick1") +
+  annotate("text", x = ES.hist, y = 20, label = ES.text) + xlim(0, 500) +
+  labs(x= "Loss", y="Count", title=title.text) +
+  theme(legend.position='none')
+
+# Note - second vline was excluded because ggplotly causes flexdashboard to fail to render when 
+# it is included
+
+ggplotly(p3)
+
+```
+
+####
+
+The red areas are our distribution of returns.
+
+The dashed line is the  Value at risk marker. This is where we know we are 95% confident that our \$9696.67 portfolio  will not lose more than \$194.46 on any given day. 
+
+The expected shortfall is the solid blue line of about \$265. This is our average loss on the 5% of days worse than the VaR threshold.
+
+If we have \$250 million to invest instead of \$9696.67, our VaR would be `r VaR.hist * 250e6 / sum(weights.rf[1,])`, and our expected shortfall would be `r ES.hist * 250e6 / sum(weights.rf[1,])`.  
+
+We want to be on the left hand side of the distribution in order to be safe with our \$250M, and should hedge against such extreme losses.
+
+We note that the ES is `r 100 * 264.84/9696.67`%.  This is actually a worse loss than the 2.6% loss of holding a portfolio of 100% nickel, so this portfolio is clearly sub-optimal!  We should proceed with another approach to identify an optimal portfolio.
+
+### VaR Threshold Analysis 
+
+####
+
+The next step in our analysis of commodity market risk is to take our portfolio, and analyze the statistical attributes of each 0.01 quantile of the distribution of losses.  
+
+We iterate through our loss data, and for each 0.01 quantile we subset the data above that quantile, calculate its mean, standard deviation, number of data points, and a pair of confidence intervals that assume that the data subset is normally distributed.  This is not a good assumption, as each subset is only a part of a near-normal distribution, so it is not reasonable to assume that the subset is normally distributed.
+
+We create a data frame of the 100 quantiles and their sd and thresholds.  
+
+We also calculate the mean of the difference between each data point beyond the threshold and the threshold. This is labeled as the threshold exceedance. This is not the same as the expected shortfall.  Expected shortfall is the mean of the points beyond the threshold, whereas the threshold exceedance subtracts the threshold before taking the mean.
+
+####
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# mean excess plot to determine
+# thresholds for extreme event
+# management
+
+## loss.rf was our data set of portfolio gains and losses
+data <- as.vector(loss.rf) # data is purely numeric
+
+# we identify the min loss and max profit, as the bounds that we will iterate between
+umin <- min(data) 
+umax <- max(data) - 0.1 # subtract a tad as we don't actually want to hit the higher bound
+
+nint <- 100 # grid length to generate mean excess plot
+grid.0 <- numeric(nint) # grid store
+
+e <- grid.0 # store mean exceedances e
+upper <- grid.0 # store upper confidence interval
+lower <- grid.0 # store lower confidence interval
+
+# create an array that represents the losses associated with each percential
+u <- seq(umin, umax, length = nint) # threshold u grid
+alpha <- 0.95 # confidence level
+
+# iterate through 100 steps
+for (i in 1:nint){
+  data <- data[data > u[i]] # subset data above thresholds
+  e[i] <- mean(data - u[i]) # calculate mean excess of threshold
+  sdev <- sqrt(var(data)) # standard deviation
+  n <- length(data) # sample size of subsetted data above thresholds
+  upper[i] <- e[i] + (qnorm((1 + alpha)/2) * sdev)/sqrt(n) # upper confidence interval
+  lower[i] <- e[i] - (qnorm((1 + alpha)/2) * sdev)/sqrt(n) # lower confidence interval
+}
+
+mep.df <- data.frame(threshold = u, threshold.exceedances = e, lower = lower, upper = upper) 
+
+loss.excess <- loss.rf[loss.rf > u]
+# Voila the plot => you may need to
+# tweak these limits!
+
+# plot the mean loss beyond the threshold, against the threshold
+p2 <- ggplot(mep.df, 
+            aes(x = threshold,
+                y = threshold.exceedances)) + 
+  theme_light() +
+  geom_line() +
+  geom_line(aes(x = threshold, y = lower),
+            colour = "red") + 
+  geom_line(aes(x = threshold,y = upper), 
+            colour = "red") + 
+  annotate("text",x = 400, y = 200, label = "upper 95%") +
+  annotate("text", x = 200, y = 0,label = "lower 5%")+ labs(x= "Threshold", y="Threshold Exceedance") +
+  theme(legend.position='none')
+
+ggplotly(p2)
+
+```
+
+####
+
+We observe that as the threhold increases, our mean loss initially falls.  When the threshold exceeds \$100 the corresponding mean becomes eractic because of the small number of data points included in the mean.  The mean then increases until a loss threshold of approximately \$350.  This corresponds to the 0.87 quantile of the distribution of gains and losses.  We note that, by the 0.95 quantile, the mean of the losses beyond the threshold has fallen considerably.
+
+If our approach is risk averse, we may wish to use a threshold of 0.87 instead of 0.95, as it indicates slightly higher losses compared to the threshold.
+
+
+Pareto Distribution  
+=====================================
+
+Column: Pareto Distribution  
+--------------------------------------------------------------------------
+
+### Overview  
+
+
+Having explored the behaviour of the excess loss beyond a threshold, we continue with comparing our gain/loss data to the Generalized Pareto Distribution (GPD).  
+
+The Pareto distribution is what we often think of as the 80/20 rule, ie that the majority of a phenomena is explained by a small proportion of the observations.  It is not fixed to an 80% threshold though, and can be used to explore what is happening beyond any threshold.  Here we explore our loss data beyond the VaR 95% threshold.
+
+We fit the GPD distribution to our loss data, defining the threshold, and identify the coefficients of the distribution known by the greek letters xi and beta.  
+
+We calculate a VaR threshold for the fitted GPD as: \n
+
+$$
+VaR_{gpd} = Q_{0.95} + \frac{\hat{\beta}}{\hat{\xi}} * \left(\left(\frac{(1 - \alpha_{tol})}{E_{rel}}\right)^{-\hat{\xi}} - 1\right)
+$$
+
+Where:  
+
+*  Symbol $Q_{0.95}$ is the 0.95 quantile threshold value 
+*  Symbol $\hat{\beta}$ is the beta coefficient of the GPD 
+*  Symbol $\hat{\xi}$ is the xi coefficient of the GPD 
+*  Symbol $\alpha_{tol}$ is the tolerance threshold (ie 0.95) 
+*  Symbol $E_{rel}$ is the ratio of the number of excess observations to total observations  
+
+We then calculate the ES for the fitted GPD as:  \n
+
+$$
+ES_{gpd} = \frac{(VaR_{gpd} + \hat{\beta} - \hat{\xi}.\alpha_{tol})}{(1 - \hat{\xi})}
+$$
+
+
+Column: Pareto VaR and ES 
+--------------------------------------------------------------------------
+
+### Pareto VaR and ES  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+## GPD to describe and analyze the
+## extremes library(QRM)
+alpha.tolerance <- 0.95
+u <- quantile(loss.rf, alpha.tolerance, names = FALSE)
+
+# fit pareto distribution to our loss data
+fit <- fit.GPD(loss.rf, threshold = u) # Fit GPD to the excesses
+
+# extract the GPD coefficients into variables.
+xi.hat <- fit$par.ests[["xi"]] # fitted xi
+beta.hat <- fit$par.ests[["beta"]] # fitted beta
+
+# create another copy of the data re-using a variable name for optimal confusion
+data <- loss.rf
+
+# calculate the proportion of the number of observations beyond the threshold
+# to the number of observations overall
+n.relative.excess <- length(loss.excess)/length(loss.rf) # = N_u/n
+
+# calculate a VaR of the GPD
+VaR.gpd <- u + (beta.hat/xi.hat) * (((1 - alpha.tolerance)/n.relative.excess)^(-xi.hat) - 1)
+
+# calculate an ES of the GPD
+ES.gpd <- (VaR.gpd + beta.hat - xi.hat * u)/(1 - xi.hat)
+
+```
+
+With GPD's VaR and ES calculated, we proceed with plotting the GPD  
+
+#### 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Plot away
+VaRgpd.text <- paste("GPD: Value at Risk =", round(VaR.gpd, 2))
+ESgpd.text <- paste("Expected Shortfall =", round(ES.gpd, 2))
+title.text <- paste(VaRgpd.text, ESgpd.text, sep = " ")
+
+p1 <- ggplot(loss.rf.df, 
+       aes(x = Loss,
+           fill = Distribution)) + 
+  theme_light() +
+  geom_density(alpha = 0.2) + 
+  geom_vline(aes(xintercept = VaR.gpd), 
+             colour = "blue", 
+             linetype = "dashed", 
+             size = 0.8) + 
+  geom_vline(aes(xintercept = ES.gpd), 
+             colour = "blue", 
+             size = 0.8) +
+  ggtitle(title.text)+ labs(x= "Loss", y="Density") +
+  theme(legend.position='none')
+
+ggplotly(p1)
+
+
+```
+
+
+Portfolio Optimization  
+=====================================
+
+
+Column: Portfolio Optimization  
+--------------------------------------------------------------------------
+
+### Optimal Portfolio    
+
+```{r}
+
+# Confidence in GPD showRM(fit, alpha
+# = 0.99, RM = 'ES', method = 'BFGS')
+# showRM(fit, alpha = 0.99, RM =
+# 'VaR') Generate overlay of
+# historical and GPD; could also use
+# Gaussian or t as well from the
+# asynchronous material Portfolio
+# Analytics: the Markowitz model
+R <- returns[, 1:3]/100
+quantile_R <- quantile(R[, 1], 0.95)
+# R <- subset(R, nickel > quantile_R,
+# select = nickel:aluminium)
+names.R <- colnames(R)
+mean.R <- apply(R, 2, mean)
+cov.R <- cov(R)
+sd.R <- sqrt(diag(cov.R)) ## remember these are in daily percentages
+# library(quadprog)
+Amat <- cbind(rep(1, 3), mean.R) ## set the equality constraints matrix
+mu.P <- seq(0.5 * min(mean.R), 1.5 * max(mean.R), length = 300) ## set of 300 possible target portfolio returns
+
+# mu.P <- seq(0.5*quantile_R, max(R),
+# length = 100) ## set of 300
+# possible target portfolio returns
+sigma.P <- mu.P ## set up storage for std dev's of portfolio returns
+weights <- matrix(0, nrow = 300, ncol = ncol(R)) ## storage for portfolio weights
+colnames(weights) <- names.R
+
+for (i in 1:length(mu.P)) {
+  bvec <- c(1, mu.P[i]) ## constraint vector
+  result <- solve.QP(Dmat = 2 * cov.R,
+                     dvec = rep(0, 3), Amat = Amat,
+                     bvec = bvec, meq = 2)
+  sigma.P[i] <- sqrt(result$value)
+  weights[i, ] <- result$solution
+  }
+
+
+sigma.mu.df <- data.frame(sigma.P = sigma.P,mu.P = mu.P)
+mu.free <- 0.0165 / 365 ## input value of daily risk-free interest rate
+sharpe <- (mu.P - mu.free)/sigma.P ## compute Sharpe's ratios
+ind <- (sharpe == max(sharpe)) ## Find maximum Sharpe's ratio
+ind2 <- (sigma.P == min(sigma.P)) ## find the minimum variance portfolio
+ind3 <- (mu.P > mu.P[ind2]) ## finally the efficient frontier
+col.P <- ifelse(mu.P > mu.P[ind2], "blue", "grey")
+sigma.mu.df$col.P <- col.P
+
+# renderPlotly({
+p <- ggplot(sigma.mu.df, 
+            aes(x = sigma.P,
+                             y = mu.P, group = 1)) + 
+  geom_line(aes(colour = col.P, group = col.P)) + 
+  scale_colour_identity() +
+# + xlim(0, max(sd.R*1.1)) + ylim(0, max(mean.R)*1.1) +
+  geom_point(aes(x = 0, y = mu.free), colour = "red") +
+#options(digits = 4)+ 
+  geom_point(aes(x = sigma.P[ind], y = mu.P[ind]), color='green') +
+  geom_abline(intercept = mu.free,
+                 slope = (mu.P[ind] - mu.free)/sigma.P[ind], 
+                 colour = "red") + 
+  geom_point(aes(x = sigma.P[ind2],
+                 y = mu.P[ind2])) + ## show min var portfolio
+# Metals
+  geom_point(aes(x = sd.R[1],
+                 y = mean.R[1]),
+             color='thistle') + ## show min var portfolio
+  geom_point(aes(x = sd.R[2],
+                 y = mean.R[2]),
+             color='orange') + ## show min var portfolio
+  geom_point(aes(x = sd.R[3],
+                 y = mean.R[3]),
+             color='darkgrey') + ## show min var portfolio
+#  labels
+    annotate("text", 
+           x = 0.003 + sigma.P[ind], 
+           y = mu.P[ind],
+           label = "Optimal",
+           color='green') +
+    annotate("text", 
+           x = 0.003 + sd.R[1],
+           y = mean.R[1], 
+           label = names.R[1],
+           color='thistle') +
+  annotate("text", 
+           x = 0.003 + sd.R[2], 
+           y = mean.R[2], 
+           label = names.R[2],
+           color='orange') + 
+  annotate("text", 
+           x = 0.004 + sd.R[3], 
+           y = mean.R[3], 
+           label = names.R[3],
+           color='darkgrey') + 
+  annotate("text", 
+           x = 0.006 , 
+           y = mu.free, 
+           label = "US 3 Month T-Bill (3/8/18)",
+           color='red') +
+  theme_light() +
+  theme(legend.position='none') # remove ugly plotly legend
+
+ggplotly(p)
+
+
+# }) Next steps: 1. Subset portfolio
+# data into body and tail of one
+# commodity 2. Deposit into
+# flexdashboard 3. Render all plots
+# with plotly 4. Plan sliders for
+# interaction with plots
+```
+
+
+Column: Discussion    {data-width=450}
+--------------------------------------------------------------------------
+
+### Approach    
+
+We took our learnings from an initial portfolio to build a process to identify an optimal portfolio:  
+
+* Create a large set of $250M portfolios, each with different proportions of our three metals.  
+* For each portfolio, we calculate the daily gains and losses by multiplying the value of each holding by the historical daily return.
+* For each portfolio, we then calculate the VaR, ES and Expected Daily Profit.
+* We plot the return versus the standard deviation for each of these portfolios, which creates an eliptical curve. This curve represents the "efficient frontier" of possible portfolios, one of which must be selected as the optimal balance of return (y axis) and risk (x axis).  
+* The eliptical shape of the plot means that, for any given level of risk there are two returns.  Clearly the lower of the two is undesirable as we would never knowlingly choose a lower return for a level of risk.  We therefore eliminate the lower half of the curve as invalid.  
+* We plot a point on the Y-axis that represents the "Risk Free Rate".  This is an asset with a return so low, and duration so short, that its volatility is zero and therefore does not represents a risk.  We selected an annual risk free rate of 1.65%, which is the current yield on a 3 month T-bill.  
+* We plot a straight line intersecting the risk free rate and tangentially touching the elipse.  This line's slope represents the Sharpe Ratio.  
+* The chart is also labeled with the approximate positions of the three portfolios that contain a single metal each.  
+
+#### Results  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# print out the results...
+output <- paste("The optimal mix is USD ", 
+      format(250e6 * weights[ind,1],big.mark=",", scientific=FALSE), 
+      " of Ni, \nand USD ",
+      format(250e6 * weights[ind,2],big.mark=","),
+      " of Cu, \nand USD ",
+      format(250e6 * weights[ind,3],big.mark=",", scientific=FALSE),
+      " of Al.  \nThis mix has a standard deviation of USD ",
+      format(250e6 * sigma.mu.df[ind,1],big.mark=",", scientific=FALSE),
+      " \nand an expected daily return of USD ",
+      format(250e6 * sigma.mu.df[ind,2],big.mark=",", scientific=FALSE),
+      sep="")
+
+cat(output)
+```
+
+Our optimal portfolio has approximately 18.6% Aluminium, 17.8% Copper and 63.6% Nickel.
+
+
+
+Business Questions  
+====================================
+
+Column: Answer the Questions   {.tabset} 
+--------------------------------------------------------------------------
+
+### Commodities    
+
+__How would the performance of these commodities affect the size and timing of shipping arrangements?__
+
+A freight-forwarder is often highly constrained in where their ships are, and when they unload and are ready to take on a new shipment.  They do not want to keep ships empty waiting for optimal market conditions as empty ships equate to lost profit.
+
+In our scenario, the freight-forwarder owns the commodities they are shipping - they buy them, load them on a ship, ship them, then sell them.  They are therefore highly susceptible to market fluctuations - when they arrive at the distant port the value of what they are shipping may have increased or decreased.  It is therefore important to understand how market price changes in the commodities being shipped affects the potential profit and the potential business risk. 
+
+### Customers  
+
+__How would the value of new shipping arrangements affect the value of our business with our current customers?__
+
+If we move from a portfolio of only Nickel, to a mixed portfolio of three metals, then we will potentially have less Nickel to ship to our existing customers.  Our current customers would wonder if we can fill their orders for Nickel, and whether they will recieve the same business treatment as before. 
+
+### Resources    
+
+__How would we manage the allocation of existing resources given we have just landed in this new market?__
+
+Potentialy Nickel is available in different ports to other commodities.  Potentially the customers for Aluminum and Copper are in different destination ports.  We would need to consider redistributing the routes that our tramp ships are working in order to optimize our portfolio.  This might impact other expense factors such as cost of fuel oil, labor contracts etc.
+
+### Decisions  
+
+__What is the decision the freight-forwarder must make? List key business questions and data needed to help answer these questions and support the freight-forwarder's decision.__
+
+The key business questions that the freight forwarder must make are:  
+
+* How can we minimize business risk from market fluctuation in the values of these metals?  
+* What is the optimal portfolio of metals needed to minimize risk?  
+* What is our profit if we optimize our portfolio based on risk minimization?
+* How can we make maximum profit while still serving our current customers adaquately?
+
+### Stylized Facts  
+
+__Develop the stylized facts of the markets the freight-forwarder faces.__
+
+In this scenario, the profit of a shipment is determined by the price when the ship loads, and the price when the ship docks.  If the price is high when we load and low when we dock, then we make a loss on the shipment.  We must therefore by highly concerned about commodity price volatility.  Volatility increases both the probability and the size of the risk that we will have an extreme loss associated with a shipment.
+
+We learned from the stylized facts of the Nickel, Copper and Aluminium markets that each commodity has volatility, but Nickel is more volatile than Copper and Aluminium.  This means that there is more profit to be made from Nickel, but there are potentially much bigger losses.  This suggests that we must manage risk, and that we may be able to do so from a mixed portfolio of metals.
+
+We also noted that the volatility in Nickel does not occur at the same times as the volatility in other metals, and their correlations of monthly returns are fairly low, which suggests that a diversified portfolio of metals will serve to manage risk.  In contrast, if the correlations had been high, then a mixed portfolio would not have reduced the risk.
+
+### Capital  
+
+__How much capital would the freight-forwarder need? Determine various measures of risk in the tail of each metal's distribution.__
+
+From the optimized portfolio, we see that holding less of nickel reduces risk of extreme daily loss. That can be traced back to the volatility of nickel prices/returns. Aluminum and copper have more stable prices/returns therefore less risk in holding.
+
+So ultimately, the next steps our company would want to consider are ways to mitigate the risk of holding only nickel and moving to the optimized holding of all the commodities?  
+
+Our analysis here is based on historical data, but in reality we accumulate new market data every day, which modifies the optimal risk.  Our flexdashboard could be that monitoring mechanism we put into place for management to identify when changes happen and action is needed?   
+
+Column: Conclusions  {data-width=300}
+-------------------------------------------------------------------------- 
+
+### Conclusion
+
+We conclude that it makes sense to diversify the portfolio of holdings that the freight-forwarder is shipping to avoid the risk arising from market volatility of individual metals.
+
+We identified that a portfolio of \$44M (17.8%) of Cu \$46M (18.6%) Al, and \$158M (63.6%) of Ni is the optimal  portfolio when using the Sharpe ratio to identify the optimal balance of risk and return.  
+
+We note that the expected daily profit from holding only Nickel is \$119K, whereas the average daily profit of holding our risk-optimized portfolio is only \$93K.  Diversification reduces risk, but also has the potential to reduce profit.
+
+It is particularly interesting to note how the Sharpe method produces an optimal portfolio that has a significantly higher return than the risk-averse approach of selecting a portfolio that is beyond the Expected Shortfall.  This demonstrates why portfolio management should not be entirely about risk management, but rather should balance risk and return.  
+
+
+Column: By The Numbers  {data-width=150}
+-------------------------------------------------------------------------- 
+
+### Nickel  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Ni <- round(250 * weights[ind,1] , 1)
+
+payload <- paste("$", as.character(Ni), "M", sep="")
+
+valueBox(payload, icon = "fa-ship", color="thistle")
+
+```
+
+### Copper  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Cu <- round(250 * weights[ind,2] , 1)
+payload <- paste("$", as.character(Cu), "M", sep="")
+
+valueBox(payload, icon = "fa-ship", color="orange")
+
+```
+
+### Aluminium  
+
+```{r, echo=FALSE}
+Al <- round(250 * weights[ind,3] , 1)
+payload <- paste("$", as.character(Al), "M", sep="")
+
+valueBox(payload, icon = "fa-ship", color="darkgrey")
+
+```
+
+
+### Expected Daily Profit  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+P <- round(250e3 * sigma.mu.df[ind,2], 2)
+payload <- paste(ifelse(P<0,"-$","$"), as.character(abs(P)), "K", sep="")
+
+valueBox(payload, 
+         icon = ifelse(P<0, "fa-minus", "fa-plus"), 
+         color=ifelse(P<0, "red", "green"))
+
+```
+
+### Sharpe Ratio   
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+P <- round(sharpe[ind],3)
+payload <- paste( as.character(P), sep="")
+
+valueBox(payload, 
+         icon = "fa-pencil", 
+         color= "darkgoldenrod")
+
+```
+
+
+
