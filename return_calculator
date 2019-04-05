@@ -1,0 +1,33 @@
+VIXY_5YD <- read.csv(file='/Users/nick/Desktop/market_analysis/market_data/VIXY_5YD.csv', header=TRUE, sep=",")
+prices <- VIXY_5YD[, "Adj.Close", drop = FALSE]
+n <- nrow(VIXY_5YD)
+Daily_Return <- ((prices[2:n, 1] - prices[1:(n-1), 1])/prices[1:(n-1), 1])
+Daily_Return <- as.data.frame(Daily_Return)
+Daily_Return["Date"] <- VIXY_5YD[2:n, 1]
+VIXY_5YD <- merge(VIXY_5YD, Daily_Return,by="Date")
+rm(prices, Daily_Return, n)
+
+VIXY_5YW <- read.csv(file='/Users/nick/Desktop/market_analysis/market_data/VIXY_5YW.csv', header=TRUE, sep=",")
+prices <- VIXY_5YW[, "Adj.Close", drop = FALSE]
+n <- nrow(VIXY_5YW)
+Weekly_Return <- ((prices[2:n, 1] - prices[1:(n-1), 1])/prices[1:(n-1), 1])
+Weekly_Return <- as.data.frame(Weekly_Return)
+Weekly_Return["Date"] <- VIXY_5YW[2:n, 1]
+VIXY_5YW <- merge(VIXY_5YW, Weekly_Return,by="Date")
+rm(prices, Weekly_Return, n)
+
+VIXY_5YM <- read.csv(file='/Users/nick/Desktop/market_analysis/market_data/VIXY_5YM.csv', header=TRUE, sep=",")
+
+VIXY_5YM$Adj.Close <- as.numeric(VIXY_5YM$Adj.Close)
+prices <- VIXY_5YM[, "Adj.Close", drop = FALSE]
+n <- nrow(VIXY_5YM)
+Monthly_Return <- ((prices[2:n, 1] - prices[1:(n-1), 1])/prices[1:(n-1), 1])
+Monthly_Return <- as.data.frame(Monthly_Return)
+Monthly_Return["Date"] <- VIXY_5YM[2:n, 1]
+Cont_Compounded_Ret <- log(prices[2:n, 1]) - log(prices[1:(n-1), 1])
+names(Cont_Compounded_Ret) <- prices[2:n, 1]
+Cont_Compounded_Ret <- as.data.frame(Cont_Compounded_Ret)
+Cont_Compounded_Ret["Date"] <- VIXY_5YM[2:n, 1]
+VIXY_5YM <- merge(VIXY_5YM, Monthly_Return,by="Date")
+VIXY_5YM <- merge(VIXY_5YM, Cont_Compounded_Ret,by="Date")
+rm(prices, Monthly_Return,Cont_Compounded_Ret, n)
