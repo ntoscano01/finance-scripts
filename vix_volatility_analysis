@@ -75,7 +75,7 @@ print(tail(asset.price1$VIX.Adjusted,1))
 library(corrplot)
 
 cor.asset.price1<-df.asset.price1[, c(7,13,19,25,31,37)]
-cat(("Correlation to major indexes"),'\n')
+cat(("YTD Correlation to major indexes"),'\n')
 res1 <- cor(cor.asset.price1)
 round(res1, 4)
 ```
@@ -108,11 +108,11 @@ names(df.asset.price) <- c("Date","VIX.Open","VIX.High","VIX.Low","VIX.Close","V
 head(df.asset.price,3)
 ```
 
-```{r correlation, echo=FALSE}
+```{r Historical correlation, echo=FALSE}
 library(corrplot)
 
 cor.asset.price<-df.asset.price[, c(7,13,19,25,31,37)]
-cat(("Correlation to major indexes"),'\n')
+cat(("Historical Correlation to major indexes"),'\n')
 res <- cor(cor.asset.price)
 round(res, 4)
 ```
@@ -147,6 +147,10 @@ setwd(output_dir)
 write.zoo(df.asset.price, "vix_anal_data_all.csv",index.name="Index",sep=",")
 
 write.zoo(df.asset.price1, "vix_anal_data_ytd.csv",index.name="Index",sep=",")
+
+write.zoo(res, "vix_historical_correlation.csv",index.name="Index",sep=",")
+
+write.zoo(res, "vix_ytd_correlation.csv",index.name="Index",sep=",")
 ```
 
 ```{r clean, include=FALSE}
