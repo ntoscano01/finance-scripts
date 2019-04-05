@@ -142,6 +142,8 @@ ggplot(title="NASDAG Composite",data=ss, aes(x= Date, y=IXIC.Adjusted, group=1))
 ```
 
 ```{r export, include=FALSE}
+setwd(output_dir)
+
 write.zoo(df.asset.price, "vix_anal_data_all.csv",index.name="Index",sep=",")
 
 write.zoo(df.asset.price1, "vix_anal_data_ytd.csv",index.name="Index",sep=",")
