@@ -1,0 +1,152 @@
+---
+title: "VIX Volatility Analysis"
+author: "Nicholas Toscano"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: word_document
+---
+```{r setup, include=FALSE}
+output_dir <- file.path('/Users/nick/Desktop/market_analysis/output')
+
+if (!dir.exists(output_dir)){
+  dir.create(output_dir)
+} else {
+  print("Dir already exists!")
+}
+
+getwd()
+work <- setwd('/Users/nick/Desktop/market_analysis/market_data/')
+
+packages = c("quantmod", "zoo", "ggplot2", "corrplot")
+package.check <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    install.packages(x, dependencies = TRUE)
+    library(x, character.only = TRUE)
+  }
+})
+
+search()
+
+options(scipen = 999)
+```
+
+```{r call tickers ytd, include=FALSE}
+
+
+library(quantmod)
+library(zoo)
+
+start <- as.Date("2019-01-01")
+end <- Sys.Date()
+
+tickers <- c("^VIX","VIXY","SVXY","^GSPC","^IXIC","^DJI")
+
+asset.price1 <- NULL
+for(ticker in tickers)
+  asset.price1 <- na.omit(cbind(asset.price1,getSymbols(ticker, from = start, to = end,auto.assign = F)))
+head(asset.price1,3) 
+#tail(asset.price1,3)
+
+df.asset.price1<- data.frame(date=index(asset.price1), coredata(asset.price1))
+names(df.asset.price1) <- c("Date","VIX.Open","VIX.High","VIX.Low","VIX.Close","VIX.Volume","VIX.Adjusted",
+                    "VIXY.Open","VIXY.High","VIXY.Low","VIXY.Close","VIXY.Volume","VIXY.Adjusted",
+                    "SVXY.Open","SVXY.High","SVXY.Low","SVXY.Close","SVXY.Volume","SVXY.Adjusted",
+                    "GSPC.Open","GSPC.High","GSPC.Low","GSPC.Close","GSPC.Volume","GSPC.Adjusted",
+                    "IXIC.Open","IXIC.High","IXIC.Low","IXIC.Close","IXIC.Volume","IXIC.Adjusted",
+                    "DJI.Open","DJI.High","DJI.Low","DJI.Close","DJI.Volume","DJI.Adjusted")
+
+head(df.asset.price1,3)
+```
+
+```{r analysis, echo=FALSE}
+print("VIX values greater than 30 are generally associated with a large amount of volatility as a result of investor fear or uncertainty, while values below 20 generally correspond to less stressful, even complacent, times in the markets.")
+
+x <- tail(asset.price1$VIX.Adjusted,1) 
+if(x >=30){
+  print("Indicator of high volatility")
+} else if (x <= 20) {
+  print("Indicator of low volatility")
+} else
+    print("Average market")
+
+print(tail(asset.price1$VIX.Adjusted,1))
+```
+
+```{r correlation ytd, echo=FALSE}
+library(corrplot)
+
+cor.asset.price1<-df.asset.price1[, c(7,13,19,25,31,37)]
+cat(("Correlation to major indexes"),'\n')
+res1 <- cor(cor.asset.price1)
+round(res1, 4)
+```
+
+```{r call tickers, include=FALSE}
+
+
+library(quantmod)
+library(zoo)
+
+start <- as.Date("2014-01-01")
+end <- Sys.Date()
+
+tickers <- c("^VIX","VIXY","SVXY","^GSPC","^IXIC","^DJI")
+
+asset.price <- NULL
+for(ticker in tickers)
+  asset.price <- na.omit(cbind(asset.price,getSymbols(ticker, from = start, to = end,auto.assign = F)))
+head(asset.price,3) 
+tail(asset.price,3)
+
+df.asset.price<- data.frame(date=index(asset.price), coredata(asset.price))
+names(df.asset.price) <- c("Date","VIX.Open","VIX.High","VIX.Low","VIX.Close","VIX.Volume","VIX.Adjusted",
+                    "VIXY.Open","VIXY.High","VIXY.Low","VIXY.Close","VIXY.Volume","VIXY.Adjusted",
+                    "SVXY.Open","SVXY.High","SVXY.Low","SVXY.Close","SVXY.Volume","SVXY.Adjusted",
+                    "GSPC.Open","GSPC.High","GSPC.Low","GSPC.Close","GSPC.Volume","GSPC.Adjusted",
+                    "IXIC.Open","IXIC.High","IXIC.Low","IXIC.Close","IXIC.Volume","IXIC.Adjusted",
+                    "DJI.Open","DJI.High","DJI.Low","DJI.Close","DJI.Volume","DJI.Adjusted")
+
+head(df.asset.price,3)
+```
+
+```{r correlation, echo=FALSE}
+library(corrplot)
+
+cor.asset.price<-df.asset.price[, c(7,13,19,25,31,37)]
+cat(("Correlation to major indexes"),'\n')
+res <- cor(cor.asset.price)
+round(res, 4)
+```
+
+```{r graph, echo=FALSE}
+library(ggplot2)
+
+ggplot(title="VIX",data=df.asset.price, aes(x= Date, y=VIX.Adjusted, group=1)) +
+  geom_line()
+
+ss <- subset(df.asset.price, Date > as.Date("2019-01-01"))
+
+ggplot(title="VIX",data=ss, aes(x= Date, y=VIX.Adjusted, group=1)) +
+  geom_line()
+
+ggplot(title="VIXY",data=ss, aes(x= Date, y=VIXY.Adjusted, group=1)) +
+  geom_line()
+
+ggplot(title="SVXY",data=ss, aes(x= Date, y=SVXY.Adjusted, group=1)) +
+  geom_line()
+
+ggplot(title="S&P 500",data=ss, aes(x= Date, y=GSPC.Adjusted, group=1)) +
+  geom_line()
+
+ggplot(title="NASDAG Composite",data=ss, aes(x= Date, y=IXIC.Adjusted, group=1)) +
+  geom_line()
+```
+
+```{r export, include=FALSE}
+write.zoo(df.asset.price, "vix_anal_data_all.csv",index.name="Index",sep=",")
+
+write.zoo(df.asset.price1, "vix_anal_data_ytd.csv",index.name="Index",sep=",")
+```
+
+```{r clean, include=FALSE}
+rm(end, packages, start,  ticker, tickers, work, package.check, asset.price, asset.price1, ss, x, cor.asset.price, cor.asset.price1 )
+```
