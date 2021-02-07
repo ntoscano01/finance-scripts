@@ -1,0 +1,100 @@
+---
+title: "Quantmod"
+author: "cms"
+date: "February 11, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(quantmod)
+library(PerformanceAnalytics)
+library(RColorBrewer)
+library(tseries)
+library(lubridate)
+library(Quandl)
+Quandl.api_key("zrcB2Ejv9UmvhPCUsy2_")
+
+
+```
+
+
+#Review of last Project (i.e., Ad, Cl, getsymbols, etc.)
+
+```{r}
+msft <- getSymbols("MSFT", auto.assign = F)
+head(msft)
+tsla <- getSymbols("TSLA", auto.assign = F)
+tsla_daily_return <-dailyReturn(tsla$TSLA.Adjusted)
+head(tsla_daily_return)
+```
+
+
+# Charting
+
+#Line Graph
+
+```{r}
+chartSeries(msft,
+            type = "bar", 
+            subset = "2020",
+            theme = chartTheme('white'))
+```
+
+#Candlestick
+
+```{r}
+chartSeries(msft,
+            type = "auto", 
+            subset = "2007-05-10::2007-10-10",
+            theme = chartTheme('white'))
+```
+
+
+#Bollinger Bands
+
+```{r pressure, echo=FALSE, fig.cap="A caption", out.width = '100%'}
+knitr::include_graphics("bollingerbands1.gif")
+```
+
+```{r}
+msft <- getSymbols("MSFT", auto.assign = F)
+chartSeries(msft,
+            subset = "2020",
+            TA = "addBBands(n = 20, sd = 2)",
+            theme = chartTheme('white'))
+```
+
+
+#RSI
+
+```{r pressure, echo=FALSE, fig.cap="A caption", out.width = '100%'}
+knitr::include_graphics("rsi.png")
+```
+
+```{r}
+msft <- getSymbols("MSFT", auto.assign = F)
+chartSeries(msft,
+            subset = "2020",
+            TA = c("addBBands(n = 20, sd = 2)",addRSI()),
+            theme = chartTheme('white'))
+```
+
+
+#MACD
+
+```{r pressure, echo=FALSE, fig.cap="A caption", out.width = '100%'}
+knitr::include_graphics("macd.png")
+```
+
+```{r}
+chartSeries(msft, type = "line",TA = c(addBBands(n = 20, sd = 2), addRSI(), addEMA(n = 30)),subset = "2007",theme = chartTheme("white"))
+```
+
+
+
+
